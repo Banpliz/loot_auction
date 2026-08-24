@@ -3,10 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev:server": "tsx watch src/server/index.ts",
+    "dev:server": "tsx watch --env-file=.env src/server/index.ts",
     "dev:web": "vite",
     "build:web": "vite build",
-    "start": "tsx src/server/index.ts",
+    "start": "tsx --env-file=.env src/server/index.ts",
     "test": "vitest run"
   },
   "dependencies": {
