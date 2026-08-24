@@ -1,0 +1,39 @@
+body {
+  font-family: system-ui, sans-serif;
+  margin: 0;
+  padding: 1rem;
+}
+.tabs button {
+  margin-right: 0.5rem;
+}
+.tabs button.active {
+  font-weight: bold;
+}
+.items {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+.item,
+.admin-item {
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  padding: 0.5rem;
+  text-align: center;
+}
+.item img,
+.admin-item img {
+  max-width: 100%;
+  border-radius: 4px;
+}
+.badge {
+  color: green;
+  font-weight: bold;
+}
+.error {
+  color: red;
+}
+section {
+  margin-bottom: 1.5rem;
+}
