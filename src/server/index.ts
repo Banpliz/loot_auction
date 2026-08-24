@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from './config';
 import { openDb } from './db';
@@ -5,6 +6,7 @@ import { buildServer } from './server';
 import { createBot } from './bot';
 
 const config = loadConfig();
+fs.mkdirSync(config.dataDir, { recursive: true });
 const db = openDb(path.join(config.dataDir, 'app.db'));
 const app = buildServer(
   { db, botToken: config.botToken, adminTelegramIds: config.adminTelegramIds, dataDir: config.dataDir },
