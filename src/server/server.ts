@@ -7,6 +7,8 @@ import { registerAuth } from './auth';
 import { registerUserRoutes } from './routes/users';
 import { registerSettingsRoutes } from './routes/settings';
 import { registerEventRoutes } from './routes/events';
+import { registerScreenshotRoutes } from './routes/screenshots';
+import { registerItemRoutes } from './routes/items';
 
 export function buildServer(deps: AppDeps, webDistDir?: string) {
   const app = Fastify();
@@ -19,6 +21,8 @@ export function buildServer(deps: AppDeps, webDistDir?: string) {
       registerUserRoutes(api, deps);
       registerSettingsRoutes(api, deps);
       registerEventRoutes(api, deps);
+      registerScreenshotRoutes(api, deps);
+      registerItemRoutes(api, deps);
     },
     { prefix: '/api' }
   );
