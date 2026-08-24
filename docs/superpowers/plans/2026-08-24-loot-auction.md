@@ -168,8 +168,8 @@ DATA_DIR=./data
 
 - [ ] **Step 7: Verify the project installs and the test runner works**
 
-Run: `npm test`
-Expected: vitest runs with "No test files found" (not an error) — confirms the toolchain is wired before any code exists.
+Run: `npx tsc --version && npx vitest --version`
+Expected: both print version numbers with no errors — confirms the toolchain is installed and wired before any code exists. (Do not run `npm test` yet: vitest exits non-zero when no test files exist, which would look like a failure.)
 
 - [ ] **Step 8: Commit**
 
