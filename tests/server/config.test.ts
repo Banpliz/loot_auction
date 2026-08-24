@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { loadConfig } from '../../src/server/config';
 
@@ -21,5 +22,10 @@ describe('loadConfig', () => {
     const config = loadConfig(base);
     expect(config.port).toBe(3000);
     expect(config.dataDir.endsWith('data')).toBe(true);
+  });
+
+  it('resolves a relative DATA_DIR to an absolute path', () => {
+    const config = loadConfig({ ...base, DATA_DIR: './data' });
+    expect(path.isAbsolute(config.dataDir)).toBe(true);
   });
 });

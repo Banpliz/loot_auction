@@ -23,6 +23,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       .map((s) => Number(s.trim()))
       .filter((n) => Number.isFinite(n) && n > 0),
     port: Number(env.PORT ?? 3000),
-    dataDir: env.DATA_DIR ?? path.join(process.cwd(), 'data'),
+    dataDir: path.resolve(env.DATA_DIR ?? 'data'),
   };
 }
