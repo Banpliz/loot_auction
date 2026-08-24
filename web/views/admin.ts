@@ -1,6 +1,7 @@
 // web/views/admin.ts
 import { apiFetch } from '../api';
 import { getTelegramWebApp } from '../telegram';
+import { escapeHtml } from '../escape-html';
 
 export async function renderAdmin(root: HTMLElement) {
   root.innerHTML = `
@@ -50,13 +51,13 @@ export async function renderAdmin(root: HTMLElement) {
       itemsEl.innerHTML = '<p>Нет активного ивента</p>';
       return;
     }
-    itemsEl.innerHTML = `<p>${current.event.title} — ${current.event.status}</p>` +
+    itemsEl.innerHTML = `<p>${escapeHtml(current.event.title)} — ${current.event.status}</p>` +
       current.items
         .map(
           (item: any) => `
           <div class="admin-item" data-id="${item.id}">
             <img src="/uploads/${item.imagePath}" />
-            <input value="${item.name}" data-role="name" />
+            <input value="${escapeHtml(item.name)}" data-role="name" />
             <button data-action="save-name">Сохранить имя</button>
             <button data-action="remove">Убрать</button>
             <span>${item.status}</span>

@@ -1,5 +1,6 @@
 // web/views/pool.ts
 import { apiFetch } from '../api';
+import { escapeHtml } from '../escape-html';
 
 interface Item {
   id: number;
@@ -45,11 +46,11 @@ export async function renderPool(root: HTMLElement) {
     .map(
       (item) => `
       <div class="item" data-id="${item.id}">
-        <img src="/uploads/${item.imagePath}" alt="${item.name}" />
-        <p>${item.name}</p>
+        <img src="/uploads/${item.imagePath}" alt="${escapeHtml(item.name)}" />
+        <p>${escapeHtml(item.name)}</p>
         ${
           item.status === 'auctioned'
-            ? `<p class="badge">Разыграно: ${item.winnerNickname ?? '—'}</p>`
+            ? `<p class="badge">Разыграно: ${item.winnerNickname ? escapeHtml(item.winnerNickname) : '—'}</p>`
             : `<button data-action="${item.claimedByMe ? 'unclaim' : 'claim'}">${
                 item.claimedByMe ? 'Отказаться' : 'Хочу'
               }</button>`
