@@ -1,0 +1,13 @@
+[Unit]
+Description=Loot Auction Mini App
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/loot-auction
+ExecStart=/usr/bin/npx tsx src/server/index.ts
+Restart=on-failure
+EnvironmentFile=/opt/loot-auction/.env
+User=loot-auction
+
+[Install]
+WantedBy=multi-user.target
