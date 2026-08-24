@@ -6,6 +6,7 @@ import type { AppDeps } from './types';
 import { registerAuth } from './auth';
 import { registerUserRoutes } from './routes/users';
 import { registerSettingsRoutes } from './routes/settings';
+import { registerEventRoutes } from './routes/events';
 
 export function buildServer(deps: AppDeps, webDistDir?: string) {
   const app = Fastify();
@@ -17,6 +18,7 @@ export function buildServer(deps: AppDeps, webDistDir?: string) {
       registerAuth(api, deps);
       registerUserRoutes(api, deps);
       registerSettingsRoutes(api, deps);
+      registerEventRoutes(api, deps);
     },
     { prefix: '/api' }
   );
