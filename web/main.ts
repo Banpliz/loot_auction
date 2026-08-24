@@ -2,6 +2,7 @@
 import { apiFetch } from './api';
 import { renderProfilePrompt } from './views/profile';
 import { renderPool } from './views/pool';
+import { renderAdmin } from './views/admin';
 
 interface Me {
   telegramId: number;
@@ -34,12 +35,21 @@ function renderShell(root: HTMLElement, me: Me) {
   root.innerHTML = `
     <nav class="tabs">
       <button data-tab="pool" class="active">Лоты</button>
+      ${me.isAdmin ? '<button data-tab="admin">Админ</button>' : ''}
     </nav>
     <div id="tab-content"></div>
   `;
   const content = root.querySelector('#tab-content') as HTMLElement;
   renderPool(content);
-  void me; // admin tab wired in Task 16
+
+  root.querySelectorAll('nav button').forEach((button) => {
+    button.addEventListener('click', () => {
+      root.querySelectorAll('nav button').forEach((b) => b.classList.remove('active'));
+      button.classList.add('active');
+      if (button.getAttribute('data-tab') === 'admin') renderAdmin(content);
+      else renderPool(content);
+    });
+  });
 }
 
 main();
