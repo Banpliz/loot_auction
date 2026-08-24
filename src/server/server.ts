@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { AppDeps } from './types';
 import { registerAuth } from './auth';
 import { registerUserRoutes } from './routes/users';
+import { registerSettingsRoutes } from './routes/settings';
 
 export function buildServer(deps: AppDeps, webDistDir?: string) {
   const app = Fastify();
@@ -15,6 +16,7 @@ export function buildServer(deps: AppDeps, webDistDir?: string) {
     async (api) => {
       registerAuth(api, deps);
       registerUserRoutes(api, deps);
+      registerSettingsRoutes(api, deps);
     },
     { prefix: '/api' }
   );
