@@ -4,6 +4,7 @@ import fastifyMultipart from '@fastify/multipart';
 import path from 'node:path';
 import type { AppDeps } from './types';
 import { registerAuth } from './auth';
+import { registerUserRoutes } from './routes/users';
 
 export function buildServer(deps: AppDeps, webDistDir?: string) {
   const app = Fastify();
@@ -13,7 +14,7 @@ export function buildServer(deps: AppDeps, webDistDir?: string) {
   app.register(
     async (api) => {
       registerAuth(api, deps);
-      api.get('/me', async () => ({ ok: true })); // replaced in Task 9
+      registerUserRoutes(api, deps);
     },
     { prefix: '/api' }
   );
