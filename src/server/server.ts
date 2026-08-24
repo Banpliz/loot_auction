@@ -13,7 +13,7 @@ import { registerItemRoutes } from './routes/items';
 export function buildServer(deps: AppDeps, webDistDir?: string) {
   const app = Fastify();
 
-  app.register(fastifyMultipart);
+  app.register(fastifyMultipart, { limits: { fileSize: 20 * 1024 * 1024 } });
 
   app.register(
     async (api) => {
