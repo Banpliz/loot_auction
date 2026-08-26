@@ -30,17 +30,17 @@ export interface LayoutTemplate {
   // of containing one. Leave undefined only where this hasn't been measured
   // yet; grid-slice.ts falls back to the old (worse) per-rows division.
   rowHeight?: number;
-  // colorSample/priceBox/iconBox are fractions of one row-unit (not the whole
+  // colorSample/iconBox are fractions of one row-unit (not the whole
   // screenshot) — a row-unit is everything from the top of one item's row
   // (including "Аукцион вторжения"'s per-row countdown pill, if present) to
   // the top of the next one.
   colorSample: Point;
-  priceBox: Box;
   // The item's rarity-framed icon badge (level + sprite + stack count) — used
   // as the lot's displayed image instead of the whole row screenshot, since
-  // the badge alone identifies the item at a glance and needs no OCR. Leave
-  // undefined where this hasn't been measured yet; screenshots.ts falls back
-  // to using the full row strip as the image, like before this existed.
+  // the badge alone identifies the item at a glance and neither it nor the
+  // price need OCR (price isn't shown at all — players already see it in the
+  // game). Leave undefined where this hasn't been measured yet;
+  // screenshots.ts falls back to using the full row strip as the image.
   iconBox?: Box;
 }
 
@@ -59,7 +59,6 @@ export const LAYOUT_TEMPLATES: Record<Template, LayoutTemplate> = {
     // Same row-unit shape as invasion (countdown pill above an item card),
     // just a bit more compact — icon frames sit slightly further left.
     colorSample: { x: 0.08, y: 0.62 },
-    priceBox: { x: 0.58, y: 0.42, w: 0.15, h: 0.35 },
   },
   invasion: {
     // Measured pixel-exact from a real 720x1565 "Аукцион вторжения"
@@ -71,18 +70,7 @@ export const LAYOUT_TEMPLATES: Record<Template, LayoutTemplate> = {
     // 2026-08-26 for the before/after screenshots.
     contentTop: 0.439,
     rowHeight: 0.106,
-    // Each row-unit = a countdown pill (top ~25%) above the item card
-    // (bottom ~75%), so color/price both sample within that bottom band.
     colorSample: { x: 0.12, y: 0.62 },
-    // Price sits top-right of the card (coin icon + amount), well above the
-    // "Ставка" button — an earlier box (y=0.45) was centered on the button
-    // instead, which is why recognized "prices" were fragments of "Ставка".
-    // Narrowed further (x=0.56→0.6) to exclude the coin icon itself — with
-    // it included, tesseract was reading icon+digits as one garbled blob
-    // ("EE —— / 3% 070 Ki" for an actual "20.0K"); cropped to just the digits
-    // it at least stays digit/letter-shaped, which is what admin has to
-    // correct by hand when it's still wrong — see chat 2026-08-27.
-    priceBox: { x: 0.6, y: 0.07, w: 0.22, h: 0.32 },
     // The rarity-diamond badge (level + sprite + stack count). Measured the
     // same way as contentTop/rowHeight above.
     iconBox: { x: 0.1, y: 0.12, w: 0.18, h: 0.75 },

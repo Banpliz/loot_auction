@@ -1,12 +1,11 @@
-import type { FastifyInstance, FastifyBaseLogger } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import type { AppDeps } from '../types';
 import { requireAdmin } from '../auth';
 import { sliceImageToCells, cropBox } from '../grid-slice';
-import { isTemplate, LAYOUT_TEMPLATES, type Template } from '../layout-templates';
+import { isTemplate, LAYOUT_TEMPLATES } from '../layout-templates';
 import { detectColor } from '../color-detect';
-import { recognizeStrip } from '../ocr';
 
 export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
   app.post<{ Params: { id: string } }>(
@@ -54,11 +53,11 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
         'INSERT INTO screenshots (event_id, original_path, rows, template, uploaded_by) VALUES (?, ?, ?, ?, ?)'
       );
       const insertItem = deps.db.prepare(
-        "INSERT INTO items (event_id, screenshot_id, image_path, status) VALUES (?, ?, ?, 'pool')"
+        "INSERT INTO items (event_id, screenshot_id, image_path, color, status) VALUES (?, ?, ?, ?, 'pool')"
       );
 
       const itemIds: number[] = [];
-      const pendingExtraction: { itemId: number; stripPath: string }[] = [];
+      const { iconBox } = LAYOUT_TEMPLATES[template];
 
       for (let f = 0; f < fileBuffers.length; f++) {
         const originalPath = path.join(originalsDir, `${eventId}-${Date.now()}-${f}.png`);
@@ -76,65 +75,32 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
           LAYOUT_TEMPLATES[template].contentTop,
           LAYOUT_TEMPLATES[template].rowHeight
         );
-        const { iconBox } = LAYOUT_TEMPLATES[template];
         for (let i = 0; i < cellPaths.length; i++) {
           const cellPath = cellPaths[i];
-          // The icon badge alone identifies the item and needs no OCR, so it's what
-          // gets shown as the lot's image — the full row strip (with its OCR-mangled
-          // name/price text baked into the picture) stays internal, used only to feed
-          // the color/OCR extraction below. Templates without a measured iconBox yet
-          // fall back to the old behavior of showing the whole row.
+          // The icon badge alone identifies the item, so it's what gets shown as the
+          // lot's image; the full row strip stays only as the source for color
+          // detection below. Templates without a measured iconBox yet fall back to
+          // showing the whole row.
           const imagePath = iconBox
             ? await cropBox(cellPath, iconBox, path.join(itemsDir, `ss${screenshotId}-${i}-icon.png`))
             : cellPath;
           const relPath = path.relative(uploadsDir, imagePath).split(path.sep).join('/');
-          const itemId = insertItem.run(eventId, screenshotId, relPath).lastInsertRowid as number;
+
+          // Color detection is a plain pixel sample (no OCR, no network) — cheap
+          // enough to do inline instead of the background-job dance OCR used to need.
+          let color: 'blue' | 'purple' | 'red' = 'blue';
+          try {
+            color = await detectColor(cellPath, template);
+          } catch (err) {
+            request.log.warn({ err }, 'color detection failed, defaulting to blue');
+          }
+
+          const itemId = insertItem.run(eventId, screenshotId, relPath, color).lastInsertRowid as number;
           itemIds.push(itemId);
-          pendingExtraction.push({ itemId, stripPath: cellPath });
         }
       }
-
-      // ponytail: color/OCR extraction runs after the response is sent (not awaited) —
-      // it can take tens of seconds across many rows, long enough to trip a mobile
-      // connection or tunnel timeout if the client had to wait on it. Items start with
-      // the schema's blank/blue defaults and get updated in place as extraction
-      // completes; the admin's review list picks it up on its next refresh. If the
-      // server restarts mid-batch, whatever hasn't finished stays blank — admin fills
-      // it in by hand, same as any other extraction miss.
-      extractInBackground(deps, request.log, pendingExtraction, template).catch((err) => {
-        request.log.error({ err }, 'background color/OCR extraction crashed');
-      });
 
       return { itemIds };
     }
   );
-}
-
-async function extractInBackground(
-  deps: AppDeps,
-  log: FastifyBaseLogger,
-  items: { itemId: number; stripPath: string }[],
-  template: Template
-) {
-  // name isn't touched here — it's a manual-only field (see ocr.ts), left at
-  // whatever the admin has typed since the item was created.
-  const updateItem = deps.db.prepare('UPDATE items SET price = ?, color = ? WHERE id = ?');
-  for (const { itemId, stripPath } of items) {
-    let color: 'blue' | 'purple' | 'red' = 'blue';
-    try {
-      color = await detectColor(stripPath, template);
-    } catch (err) {
-      log.warn({ err }, 'color detection failed, defaulting to blue');
-    }
-
-    let price = '';
-    try {
-      const extracted = await recognizeStrip(stripPath, template, path.join(deps.dataDir, 'ocr-cache'));
-      price = extracted.price;
-    } catch (err) {
-      log.warn({ err }, 'OCR failed, leaving price blank');
-    }
-
-    updateItem.run(price, color, itemId);
-  }
 }

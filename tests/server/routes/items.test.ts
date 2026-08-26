@@ -35,7 +35,7 @@ describe('items routes', () => {
       .run(eventId, screenshotId).lastInsertRowid as number;
   });
 
-  it('PUT /items/:id is admin-only and updates name/price/color', async () => {
+  it('PUT /items/:id is admin-only and updates name/color', async () => {
     const forbidden = await app.inject({
       method: 'PUT',
       url: `/api/items/${itemAId}`,
@@ -48,24 +48,23 @@ describe('items routes', () => {
       method: 'PUT',
       url: `/api/items/${itemAId}`,
       headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
-      payload: { name: 'Меч', price: '24.0K', color: 'red' },
+      payload: { name: 'Меч', color: 'red' },
     });
-    const row = db.prepare('SELECT name, price, color FROM items WHERE id = ?').get(itemAId) as any;
+    const row = db.prepare('SELECT name, color FROM items WHERE id = ?').get(itemAId) as any;
     expect(row.name).toBe('Меч');
-    expect(row.price).toBe('24.0K');
     expect(row.color).toBe('red');
   });
 
-  it('PUT /items/:id accepts a partial update (price only)', async () => {
+  it('PUT /items/:id accepts a partial update (color only)', async () => {
     await app.inject({
       method: 'PUT',
       url: `/api/items/${itemAId}`,
       headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
-      payload: { price: '10.0K' },
+      payload: { color: 'purple' },
     });
-    const row = db.prepare('SELECT name, price FROM items WHERE id = ?').get(itemAId) as any;
+    const row = db.prepare('SELECT name, color FROM items WHERE id = ?').get(itemAId) as any;
     expect(row.name).toBe('A'); // unchanged
-    expect(row.price).toBe('10.0K');
+    expect(row.color).toBe('purple');
   });
 
   it('PUT /items/:id rejects an invalid color', async () => {

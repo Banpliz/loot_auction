@@ -5,13 +5,13 @@ import { requireAdmin } from '../auth';
 const VALID_COLORS = new Set(['blue', 'purple', 'red']);
 
 export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
-  app.put<{ Params: { id: string }; Body: { name?: string; price?: string; color?: string } }>(
+  app.put<{ Params: { id: string }; Body: { name?: string; color?: string } }>(
     '/items/:id',
     { preHandler: requireAdmin(deps) },
     async (request, reply) => {
-      const { name, price, color } = request.body ?? {};
-      if (name === undefined && price === undefined && color === undefined) {
-        reply.code(400).send({ error: 'at least one of name, price, color is required' });
+      const { name, color } = request.body ?? {};
+      if (name === undefined && color === undefined) {
+        reply.code(400).send({ error: 'at least one of name, color is required' });
         return;
       }
       if (color !== undefined && !VALID_COLORS.has(color)) {
@@ -25,10 +25,6 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
       if (name !== undefined) {
         updates.push('name = ?');
         values.push(name.trim());
-      }
-      if (price !== undefined) {
-        updates.push('price = ?');
-        values.push(price.trim());
       }
       if (color !== undefined) {
         updates.push('color = ?');

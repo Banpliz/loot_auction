@@ -19,7 +19,7 @@ function colorGroup(color: string): ColorGroup {
   return color === 'blue' ? 'blue' : 'purpleRed';
 }
 
-const ITEM_COLUMNS = `i.id, i.name, i.price, i.color, i.image_path as imagePath, i.status,
+const ITEM_COLUMNS = `i.id, i.name, i.color, i.image_path as imagePath, i.status,
                 i.winner_telegram_id as winnerTelegramId,
                 w.game_nickname as winnerNickname`;
 

@@ -7,7 +7,6 @@ import { ITEM_COLORS, colorHex } from '../format';
 interface AdminItem {
   id: number;
   name: string;
-  price: string;
   color: string;
   imagePath: string;
   status: 'pool' | 'auctioned' | 'removed';
@@ -37,10 +36,7 @@ async function compressForUpload(file: File, maxWidth = 720, quality = 0.7): Pro
   });
 }
 
-let refreshTimer: ReturnType<typeof setInterval> | undefined;
-
 export async function renderEventDetail(root: HTMLElement, eventId: number, onBack: () => void) {
-  if (refreshTimer) clearInterval(refreshTimer);
   root.innerHTML = '<p class="spinner-text">Загрузка…</p>';
   const data = await apiFetch(`/events/${eventId}`);
 
@@ -59,11 +55,11 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
       <h3>Загрузить скриншоты аукциона</h3>
       <p style="color:var(--text-muted);font-size:0.85rem">
         Можно выбрать сразу несколько скриншотов — все они должны показывать одинаковое
-        количество строк. Приложение порежет их на лоты, определит цвет редкости и
-        попробует распознать цену в фоне — список ниже обновится сам по мере готовности,
-        проверь и поправь то, что распозналось криво. Название не распознаётся
+        количество строк. Приложение порежет их на лоты и определит цвет редкости —
+        проверь и поправь, если распозналось не то. Название не распознаётся
         автоматически — впиши вручную только если по иконке не понятно, что за лот
-        (например, у сундуков одного вида, но разного уровня).
+        (например, у сундуков одного вида, но разного уровня). Цену не показываем —
+        участники и так видят её в игре.
       </p>
       <form id="screenshot-form">
         <div class="field-row">
@@ -88,10 +84,7 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
     </section>
   `;
 
-  (root.querySelector('#back-btn') as HTMLButtonElement).addEventListener('click', () => {
-    if (refreshTimer) clearInterval(refreshTimer);
-    onBack();
-  });
+  (root.querySelector('#back-btn') as HTMLButtonElement).addEventListener('click', onBack);
 
   let allItems: AdminItem[] = [];
 
@@ -112,14 +105,11 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
         <div class="admin-item" data-id="${item.id}" style="border-left: 4px solid ${colorHex(item.color)}">
           <img src="/uploads/${item.imagePath}" />
           <input value="${escapeHtml(item.name)}" data-role="name" placeholder="Пометка (не обязательно, напр. «III»)" />
-          <div class="field-row">
-            <input value="${escapeHtml(item.price)}" data-role="price" placeholder="Цена" />
-            <select data-role="color">
-              ${ITEM_COLORS.map(
-                (c) => `<option value="${c.value}" ${item.color === c.value ? 'selected' : ''}>${c.label}</option>`
-              ).join('')}
-            </select>
-          </div>
+          <select data-role="color">
+            ${ITEM_COLORS.map(
+              (c) => `<option value="${c.value}" ${item.color === c.value ? 'selected' : ''}>${c.label}</option>`
+            ).join('')}
+          </select>
           <span class="status-pill">${STATUS_LABEL[item.status]}${item.winnerNickname ? ' · ' + escapeHtml(item.winnerNickname) : ''}</span>
           <div class="admin-item-actions">
             <button class="btn-secondary btn-sm" data-action="save">Сохранить</button>
@@ -133,13 +123,12 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
       button.addEventListener('click', async () => {
         const itemEl = button.closest('.admin-item') as HTMLElement;
         const name = (itemEl.querySelector('[data-role="name"]') as HTMLInputElement).value;
-        const price = (itemEl.querySelector('[data-role="price"]') as HTMLInputElement).value;
         const color = (itemEl.querySelector('[data-role="color"]') as HTMLSelectElement).value;
         try {
           await apiFetch(`/items/${itemEl.dataset.id}`, {
             method: 'PUT',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ name, price, color }),
+            body: JSON.stringify({ name, color }),
           });
         } catch (err) {
           (root.querySelector('#upload-error') as HTMLElement).textContent = (err as Error).message;
@@ -242,23 +231,8 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
       errorEl.textContent = `Не загрузилось (${failed.length} из ${files.length}): ${failed.join('; ')}`;
     }
     const okCount = files.length - failed.length;
-    if (okCount > 0) {
-      statusEl.textContent = `Загружено ${okCount} из ${files.length} — цена/цвет распознаются в фоне, список обновится сам.`;
-      startAutoRefresh();
-    } else {
-      statusEl.textContent = '';
-    }
+    statusEl.textContent = okCount > 0 ? `Загружено ${okCount} из ${files.length}.` : '';
   });
-
-  function startAutoRefresh() {
-    if (refreshTimer) clearInterval(refreshTimer);
-    let ticks = 0;
-    refreshTimer = setInterval(async () => {
-      ticks++;
-      await loadItems();
-      if (ticks >= 20) clearInterval(refreshTimer); // stop after ~1 minute either way
-    }, 3000);
-  }
 
   (root.querySelector('#resolve-btn') as HTMLButtonElement).addEventListener('click', async () => {
     if (!confirm('Разыграть все лоты в пуле? Это действие нельзя отменить.')) return;

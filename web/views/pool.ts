@@ -6,7 +6,6 @@ import { colorHex } from '../format';
 interface Item {
   id: number;
   name: string;
-  price: string;
   color: string;
   imagePath: string;
   status: 'pool' | 'auctioned' | 'removed';
@@ -53,10 +52,7 @@ export async function renderPool(root: HTMLElement) {
   const renderItem = (item: Item) => `
       <div class="lot-row" data-id="${item.id}" style="border-left: 4px solid ${colorHex(item.color)}">
         <img src="/uploads/${item.imagePath}" alt="${escapeHtml(item.name) || 'Лот'}" />
-        <div class="lot-row__info">
-          ${item.name ? `<p class="lot-row__name">${escapeHtml(item.name)}</p>` : ''}
-          ${item.price ? `<span class="price-tag">🪙 ${escapeHtml(item.price)}</span>` : ''}
-        </div>
+        ${item.name ? `<div class="lot-row__info"><p class="lot-row__name">${escapeHtml(item.name)}</p></div>` : ''}
         ${
           item.status === 'auctioned'
             ? `<p class="badge">Разыграно: ${item.winnerNickname ? escapeHtml(item.winnerNickname) : '—'}</p>`
