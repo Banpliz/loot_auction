@@ -10,6 +10,21 @@ export function openDb(filePath: string): Db {
 }
 
 function migrate(db: Db) {
+  // ponytail: catalog_items-based schema is incompatible (items.catalog_item_id was required,
+  // items had no price/color-as-strings, no screenshots.template). No real production data yet,
+  // so reset lots/screenshots instead of a column-by-column rebuild migration. Events/users untouched.
+  const existingItemColumns = db.prepare('PRAGMA table_info(items)').all() as { name: string }[];
+  if (existingItemColumns.some((c) => c.name === 'catalog_item_id')) {
+    db.exec(`
+      DROP TABLE IF EXISTS claims;
+      DROP TABLE IF EXISTS items;
+      DROP TABLE IF EXISTS screenshots;
+      DROP TABLE IF EXISTS catalog_items;
+      DROP TABLE IF EXISTS settings;
+      DROP TABLE IF EXISTS price_tiers;
+    `);
+  }
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       telegram_id INTEGER PRIMARY KEY,
@@ -31,7 +46,7 @@ function migrate(db: Db) {
       event_id INTEGER NOT NULL REFERENCES events(id),
       original_path TEXT NOT NULL,
       rows INTEGER NOT NULL,
-      cols INTEGER NOT NULL,
+      template TEXT NOT NULL DEFAULT 'feast',
       uploaded_by INTEGER NOT NULL REFERENCES users(telegram_id),
       uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -41,6 +56,8 @@ function migrate(db: Db) {
       event_id INTEGER NOT NULL REFERENCES events(id),
       screenshot_id INTEGER NOT NULL REFERENCES screenshots(id),
       name TEXT NOT NULL DEFAULT '',
+      price TEXT NOT NULL DEFAULT '',
+      color TEXT NOT NULL DEFAULT 'blue',
       image_path TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pool',
       winner_telegram_id INTEGER REFERENCES users(telegram_id),
@@ -55,12 +72,5 @@ function migrate(db: Db) {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       UNIQUE(item_id, telegram_id)
     );
-
-    CREATE TABLE IF NOT EXISTS settings (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
-      max_simultaneous_claims INTEGER NOT NULL DEFAULT 5
-    );
-
-    INSERT OR IGNORE INTO settings (id, max_simultaneous_claims) VALUES (1, 5);
   `);
 }

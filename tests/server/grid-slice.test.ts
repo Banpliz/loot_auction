@@ -19,6 +19,16 @@ describe('computeGridCells', () => {
     const cells = computeGridCells(101, 41, 2, 5);
     expect(cells[0]).toEqual({ left: 0, top: 0, width: 20, height: 20 });
   });
+
+  it('skips a header band before dividing into rows when contentTopFraction is set', () => {
+    // 100-tall image, skip the top half (a repeating header), 2 rows over the
+    // remaining 50px -> each row is 25px starting at y=50.
+    const cells = computeGridCells(100, 100, 2, 1, 0.5);
+    expect(cells).toEqual([
+      { left: 0, top: 50, width: 100, height: 25 },
+      { left: 0, top: 75, width: 100, height: 25 },
+    ]);
+  });
 });
 
 describe('sliceImageToCells', () => {

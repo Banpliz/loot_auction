@@ -5,13 +5,12 @@ import path from 'node:path';
 import type { AppDeps } from './types';
 import { registerAuth } from './auth';
 import { registerUserRoutes } from './routes/users';
-import { registerSettingsRoutes } from './routes/settings';
 import { registerEventRoutes } from './routes/events';
 import { registerScreenshotRoutes } from './routes/screenshots';
 import { registerItemRoutes } from './routes/items';
 
 export function buildServer(deps: AppDeps, webDistDir?: string) {
-  const app = Fastify();
+  const app = Fastify({ logger: process.env.NODE_ENV !== 'test' });
 
   app.register(fastifyMultipart, { limits: { fileSize: 20 * 1024 * 1024 } });
 
@@ -19,7 +18,6 @@ export function buildServer(deps: AppDeps, webDistDir?: string) {
     async (api) => {
       registerAuth(api, deps);
       registerUserRoutes(api, deps);
-      registerSettingsRoutes(api, deps);
       registerEventRoutes(api, deps);
       registerScreenshotRoutes(api, deps);
       registerItemRoutes(api, deps);
