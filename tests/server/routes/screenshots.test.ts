@@ -148,6 +148,41 @@ describe('POST /api/events/:id/screenshots', () => {
     90000
   );
 
+  it('crops the item image down to just the icon badge for templates with a measured iconBox', async () => {
+    const createEventRes = await fetch(`${baseUrl}/api/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-telegram-init-data': adminInitData },
+      body: JSON.stringify({ title: 'Ивент 4', durationMinutes: 25 }),
+    });
+    const { id: eventId } = await createEventRes.json();
+
+    const imageBuffer = await sharp({ create: { width: 720, height: 1565, channels: 3, background: { r: 0, g: 0, b: 0 } } })
+      .png()
+      .toBuffer();
+
+    const form = new FormData();
+    form.append('rows', '1');
+    form.append('template', 'invasion'); // has an iconBox; 'feast' above doesn't
+    form.append('file', new Blob([imageBuffer], { type: 'image/png' }), 'reward.png');
+
+    const res = await fetch(`${baseUrl}/api/events/${eventId}/screenshots`, {
+      method: 'POST',
+      headers: { 'x-telegram-init-data': adminInitData },
+      body: form,
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    const row = db.prepare('SELECT image_path FROM items WHERE id = ?').get(body.itemIds[0]) as any;
+    expect(row.image_path).toMatch(/-icon\.png$/);
+
+    // Same black-is-closer-to-red trick as the test above — wait out the background
+    // extraction before afterEach deletes dataDir out from under it.
+    await waitFor(() =>
+      body.itemIds.every((id: number) => (db.prepare('SELECT color FROM items WHERE id = ?').get(id) as any).color === 'red')
+    );
+  }, 90000);
+
   it('rejects an unknown template', async () => {
     const createEventRes = await fetch(`${baseUrl}/api/events`, {
       method: 'POST',

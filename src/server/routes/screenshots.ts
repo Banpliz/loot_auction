@@ -3,7 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import type { AppDeps } from '../types';
 import { requireAdmin } from '../auth';
-import { sliceImageToCells } from '../grid-slice';
+import { sliceImageToCells, cropBox } from '../grid-slice';
 import { isTemplate, LAYOUT_TEMPLATES, type Template } from '../layout-templates';
 import { detectColor } from '../color-detect';
 import { recognizeStrip } from '../ocr';
@@ -76,8 +76,18 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
           LAYOUT_TEMPLATES[template].contentTop,
           LAYOUT_TEMPLATES[template].rowHeight
         );
-        for (const cellPath of cellPaths) {
-          const relPath = path.relative(uploadsDir, cellPath).split(path.sep).join('/');
+        const { iconBox } = LAYOUT_TEMPLATES[template];
+        for (let i = 0; i < cellPaths.length; i++) {
+          const cellPath = cellPaths[i];
+          // The icon badge alone identifies the item and needs no OCR, so it's what
+          // gets shown as the lot's image — the full row strip (with its OCR-mangled
+          // name/price text baked into the picture) stays internal, used only to feed
+          // the color/OCR extraction below. Templates without a measured iconBox yet
+          // fall back to the old behavior of showing the whole row.
+          const imagePath = iconBox
+            ? await cropBox(cellPath, iconBox, path.join(itemsDir, `ss${screenshotId}-${i}-icon.png`))
+            : cellPath;
+          const relPath = path.relative(uploadsDir, imagePath).split(path.sep).join('/');
           const itemId = insertItem.run(eventId, screenshotId, relPath).lastInsertRowid as number;
           itemIds.push(itemId);
           pendingExtraction.push({ itemId, stripPath: cellPath });

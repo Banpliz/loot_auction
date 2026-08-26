@@ -3,7 +3,7 @@ import sharp from 'sharp';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { computeGridCells, sliceImageToCells } from '../../src/server/grid-slice';
+import { computeGridCells, sliceImageToCells, cropBox } from '../../src/server/grid-slice';
 
 describe('computeGridCells', () => {
   it('divides the image into rows*cols equal cells in row-major order', () => {
@@ -56,5 +56,24 @@ describe('sliceImageToCells', () => {
     const meta = await sharp(paths[0]).metadata();
     expect(meta.width).toBe(20);
     expect(meta.height).toBe(20);
+  });
+});
+
+describe('cropBox', () => {
+  it('crops a fractional box of the source image', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'crop-box-'));
+    const sourcePath = path.join(tmpDir, 'source.png');
+    await sharp({ create: { width: 200, height: 100, channels: 3, background: { r: 0, g: 0, b: 255 } } })
+      .png()
+      .toFile(sourcePath);
+
+    const outPath = path.join(tmpDir, 'icon.png');
+    await cropBox(sourcePath, { x: 0.1, y: 0.2, w: 0.3, h: 0.4 }, outPath);
+
+    const meta = await sharp(outPath).metadata();
+    expect(meta.width).toBe(60); // 200 * 0.3
+    expect(meta.height).toBe(40); // 100 * 0.4
+
+    await fs.rm(tmpDir, { recursive: true, force: true });
   });
 });

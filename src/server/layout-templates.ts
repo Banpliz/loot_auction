@@ -30,13 +30,19 @@ export interface LayoutTemplate {
   // of containing one. Leave undefined only where this hasn't been measured
   // yet; grid-slice.ts falls back to the old (worse) per-rows division.
   rowHeight?: number;
-  // colorSample/nameBox/priceBox are fractions of one row-unit (not the whole
-  // screenshot) — a row-unit is everything from the top of one item's row
-  // (including "Аукцион вторжения"'s per-row countdown pill, if present) to
-  // the top of the next one.
+  // colorSample/nameBox/priceBox/iconBox are fractions of one row-unit (not
+  // the whole screenshot) — a row-unit is everything from the top of one
+  // item's row (including "Аукцион вторжения"'s per-row countdown pill, if
+  // present) to the top of the next one.
   colorSample: Point;
   nameBox: Box;
   priceBox: Box;
+  // The item's rarity-framed icon badge (level + sprite + stack count) — used
+  // as the lot's displayed image instead of the whole row screenshot, since
+  // the badge alone identifies the item at a glance and needs no OCR. Leave
+  // undefined where this hasn't been measured yet; screenshots.ts falls back
+  // to using the full row strip as the image, like before this existed.
+  iconBox?: Box;
 }
 
 // ponytail: fractional coordinates estimated by eye from real screenshots the
@@ -74,6 +80,9 @@ export const LAYOUT_TEMPLATES: Record<Template, LayoutTemplate> = {
     // "Ставка" button — the old box (y=0.45) was centered on the button
     // instead, which is why recognized "prices" were fragments of "Ставка".
     priceBox: { x: 0.56, y: 0.02, w: 0.26, h: 0.32 },
+    // The rarity-diamond badge, left of the name text. Measured the same way
+    // as contentTop/rowHeight above.
+    iconBox: { x: 0.1, y: 0.12, w: 0.18, h: 0.75 },
   },
 };
 

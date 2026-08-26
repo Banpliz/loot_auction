@@ -1,5 +1,5 @@
 // src/server/ocr.ts
-import { createWorker, PSM, type Worker } from 'tesseract.js';
+import { createWorker, type Worker } from 'tesseract.js';
 import sharp from 'sharp';
 import fs from 'node:fs/promises';
 import { LAYOUT_TEMPLATES, type Box, type Template } from './layout-templates';
@@ -48,15 +48,17 @@ export async function recognizeStrip(
   const { nameBox, priceBox } = LAYOUT_TEMPLATES[template];
   const worker = await getWorker(cacheDir);
 
-  // Name wraps across up to two lines; price is always one line ("<icon> N.NK") -
-  // telling tesseract which shape to expect noticeably cuts down on garbage,
-  // since its default auto-segmentation was treating the coin icon and text as
-  // separate blocks and mangling both.
-  await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_BLOCK });
+  // ponytail: tried pinning tessedit_pageseg_mode to SINGLE_BLOCK/SINGLE_LINE
+  // (name is up to 2 lines, price is always 1) expecting cleaner segmentation.
+  // Reverted: on a crop with no text at all (a mis-cropped row, or the
+  // screenshots.test.ts synthetic solid-color fixtures) those modes make
+  // tesseract hang instead of the default AUTO mode's fast bail-out — a stuck
+  // recognize() blocks the whole extraction loop's DB write for that item,
+  // including the color that was already detected. Default AUTO segmentation
+  // is worse at reading the coin-icon-adjacent price text but never hangs.
   const nameImage = await cropForOcr(stripPath, nameBox);
   const nameResult = await worker.recognize(nameImage);
 
-  await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_LINE });
   const priceImage = await cropForOcr(stripPath, priceBox);
   const priceResult = await worker.recognize(priceImage);
 

@@ -1,6 +1,7 @@
 import sharp from 'sharp';
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import type { Box } from './layout-templates';
 
 export interface Cell {
   left: number;
@@ -69,4 +70,21 @@ export async function sliceImageToCells(
     outputPaths.push(outPath);
   }
   return outputPaths;
+}
+
+// Crops a fraction-of-image Box (unlike ocr.ts's cropForOcr, this keeps the
+// crop as a plain color image meant for display, not grayscale/normalized
+// text-recognition input).
+export async function cropBox(sourcePath: string, box: Box, outPath: string): Promise<string> {
+  const metadata = await sharp(sourcePath).metadata();
+  const width = metadata.width ?? 0;
+  const height = metadata.height ?? 0;
+
+  const left = Math.max(Math.round(width * box.x), 0);
+  const top = Math.max(Math.round(height * box.y), 0);
+  const cropWidth = Math.max(Math.min(Math.round(width * box.w), width - left), 1);
+  const cropHeight = Math.max(Math.min(Math.round(height * box.h), height - top), 1);
+
+  await sharp(sourcePath).extract({ left, top, width: cropWidth, height: cropHeight }).toFile(outPath);
+  return outPath;
 }
