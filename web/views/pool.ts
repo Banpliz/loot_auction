@@ -52,9 +52,9 @@ export async function renderPool(root: HTMLElement) {
   const listEl = root.querySelector('.lots') as HTMLElement;
   const renderItem = (item: Item) => `
       <div class="lot-row" data-id="${item.id}" style="border-left: 4px solid ${colorHex(item.color)}">
-        <img src="/uploads/${item.imagePath}" alt="${escapeHtml(item.name)}" />
+        <img src="/uploads/${item.imagePath}" alt="${escapeHtml(item.name) || 'Лот'}" />
         <div class="lot-row__info">
-          <p class="lot-row__name">${escapeHtml(item.name) || '—'}</p>
+          ${item.name ? `<p class="lot-row__name">${escapeHtml(item.name)}</p>` : ''}
           ${item.price ? `<span class="price-tag">🪙 ${escapeHtml(item.price)}</span>` : ''}
         </div>
         ${

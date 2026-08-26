@@ -60,8 +60,10 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
       <p style="color:var(--text-muted);font-size:0.85rem">
         Можно выбрать сразу несколько скриншотов — все они должны показывать одинаковое
         количество строк. Приложение порежет их на лоты, определит цвет редкости и
-        попробует распознать название и цену в фоне — список ниже обновится сам по мере
-        готовности, проверь и поправь то, что распозналось криво.
+        попробует распознать цену в фоне — список ниже обновится сам по мере готовности,
+        проверь и поправь то, что распозналось криво. Название не распознаётся
+        автоматически — впиши вручную только если по иконке не понятно, что за лот
+        (например, у сундуков одного вида, но разного уровня).
       </p>
       <form id="screenshot-form">
         <div class="field-row">
@@ -109,7 +111,7 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
         (item) => `
         <div class="admin-item" data-id="${item.id}" style="border-left: 4px solid ${colorHex(item.color)}">
           <img src="/uploads/${item.imagePath}" />
-          <input value="${escapeHtml(item.name)}" data-role="name" placeholder="Название лота" />
+          <input value="${escapeHtml(item.name)}" data-role="name" placeholder="Пометка (не обязательно, напр. «III»)" />
           <div class="field-row">
             <input value="${escapeHtml(item.price)}" data-role="price" placeholder="Цена" />
             <select data-role="color">
@@ -241,7 +243,7 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
     }
     const okCount = files.length - failed.length;
     if (okCount > 0) {
-      statusEl.textContent = `Загружено ${okCount} из ${files.length} — название/цена/цвет распознаются в фоне, список обновится сам.`;
+      statusEl.textContent = `Загружено ${okCount} из ${files.length} — цена/цвет распознаются в фоне, список обновится сам.`;
       startAutoRefresh();
     } else {
       statusEl.textContent = '';

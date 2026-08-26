@@ -116,7 +116,9 @@ async function extractInBackground(
   items: { itemId: number; stripPath: string }[],
   template: Template
 ) {
-  const updateItem = deps.db.prepare('UPDATE items SET name = ?, price = ?, color = ? WHERE id = ?');
+  // name isn't touched here — it's a manual-only field (see ocr.ts), left at
+  // whatever the admin has typed since the item was created.
+  const updateItem = deps.db.prepare('UPDATE items SET price = ?, color = ? WHERE id = ?');
   for (const { itemId, stripPath } of items) {
     let color: 'blue' | 'purple' | 'red' = 'blue';
     try {
@@ -125,16 +127,14 @@ async function extractInBackground(
       log.warn({ err }, 'color detection failed, defaulting to blue');
     }
 
-    let name = '';
     let price = '';
     try {
       const extracted = await recognizeStrip(stripPath, template, path.join(deps.dataDir, 'ocr-cache'));
-      name = extracted.name;
       price = extracted.price;
     } catch (err) {
-      log.warn({ err }, 'OCR failed, leaving name/price blank');
+      log.warn({ err }, 'OCR failed, leaving price blank');
     }
 
-    updateItem.run(name, price, color, itemId);
+    updateItem.run(price, color, itemId);
   }
 }
