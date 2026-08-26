@@ -6,6 +6,13 @@ import { requireAdmin } from '../auth';
 import { sliceImageToCells, cropBox } from '../grid-slice';
 import { isTemplate, LAYOUT_TEMPLATES } from '../layout-templates';
 import { detectColor } from '../color-detect';
+import { computeIconSignature, groupBySignature, type IconSignature } from '../dedup';
+
+interface SlicedRow {
+  screenshotId: number;
+  cellPath: string;
+  imagePath: string;
+}
 
 export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
   app.post<{ Params: { id: string } }>(
@@ -53,11 +60,11 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
         'INSERT INTO screenshots (event_id, original_path, rows, template, uploaded_by) VALUES (?, ?, ?, ?, ?)'
       );
       const insertItem = deps.db.prepare(
-        "INSERT INTO items (event_id, screenshot_id, image_path, color, status) VALUES (?, ?, ?, ?, 'pool')"
+        "INSERT INTO items (event_id, screenshot_id, image_path, color, quantity, status) VALUES (?, ?, ?, ?, ?, 'pool')"
       );
 
-      const itemIds: number[] = [];
       const { iconBox } = LAYOUT_TEMPLATES[template];
+      const slicedRows: SlicedRow[] = [];
 
       for (let f = 0; f < fileBuffers.length; f++) {
         const originalPath = path.join(originalsDir, `${eventId}-${Date.now()}-${f}.png`);
@@ -78,26 +85,45 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
         for (let i = 0; i < cellPaths.length; i++) {
           const cellPath = cellPaths[i];
           // The icon badge alone identifies the item, so it's what gets shown as the
-          // lot's image; the full row strip stays only as the source for color
-          // detection below. Templates without a measured iconBox yet fall back to
-          // showing the whole row.
+          // lot's image (and compared below to spot duplicate rows); the full row strip
+          // stays only as the source for color detection. Templates without a measured
+          // iconBox yet fall back to using the whole row for both.
           const imagePath = iconBox
             ? await cropBox(cellPath, iconBox, path.join(itemsDir, `ss${screenshotId}-${i}-icon.png`))
             : cellPath;
-          const relPath = path.relative(uploadsDir, imagePath).split(path.sep).join('/');
-
-          // Color detection is a plain pixel sample (no OCR, no network) — cheap
-          // enough to do inline instead of the background-job dance OCR used to need.
-          let color: 'blue' | 'purple' | 'red' = 'blue';
-          try {
-            color = await detectColor(cellPath, template);
-          } catch (err) {
-            request.log.warn({ err }, 'color detection failed, defaulting to blue');
-          }
-
-          const itemId = insertItem.run(eventId, screenshotId, relPath, color).lastInsertRowid as number;
-          itemIds.push(itemId);
+          slicedRows.push({ screenshotId, cellPath, imagePath });
         }
+      }
+
+      // The same item often appears as several separate rows in the source screenshot
+      // (a common drop won by many people) — grouping identical-looking icons into one
+      // lot with a quantity, instead of one lot per row, is the whole point of this
+      // endpoint; see dedup.ts for how "identical-looking" is decided and its one known
+      // blind spot (two different items that share the exact same icon art, like a
+      // chest whose graphic doesn't change between tiers, still merge).
+      const withSignatures = await Promise.all(
+        slicedRows.map(async (row) => ({ signature: await computeIconSignature(row.imagePath), value: row }))
+      );
+      const groups = groupBySignature<SlicedRow>(withSignatures as { signature: IconSignature; value: SlicedRow }[]);
+
+      const itemIds: number[] = [];
+      for (const group of groups) {
+        const representative = group[0];
+        const relPath = path.relative(uploadsDir, representative.imagePath).split(path.sep).join('/');
+
+        // Color detection is a plain pixel sample (no OCR, no network) — cheap enough
+        // to do inline instead of the background-job dance OCR used to need.
+        let color: 'blue' | 'purple' | 'red' = 'blue';
+        try {
+          color = await detectColor(representative.cellPath, template);
+        } catch (err) {
+          request.log.warn({ err }, 'color detection failed, defaulting to blue');
+        }
+
+        const itemId = insertItem
+          .run(eventId, representative.screenshotId, relPath, color, group.length)
+          .lastInsertRowid as number;
+        itemIds.push(itemId);
       }
 
       return { itemIds };

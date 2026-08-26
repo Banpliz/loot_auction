@@ -47,6 +47,43 @@ describe('POST /api/events/:id/screenshots', () => {
       .toBuffer();
 
     const form = new FormData();
+    form.append('rows', '1');
+    form.append('template', 'feast');
+    form.append('file', new Blob([imageBuffer], { type: 'image/png' }), 'reward.png');
+
+    const res = await fetch(`${baseUrl}/api/events/${eventId}/screenshots`, {
+      method: 'POST',
+      headers: { 'x-telegram-init-data': adminInitData },
+      body: form,
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.itemIds).toHaveLength(1);
+
+    const row = db.prepare('SELECT image_path, color, name, quantity FROM items WHERE id = ?').get(body.itemIds[0]) as any;
+    expect(row.image_path.startsWith('items/')).toBe(true);
+    expect(row.color).toBe('red'); // matches the solid-red fixture, no polling needed
+    expect(row.name).toBe(''); // manual-only field, never auto-filled
+    expect(row.quantity).toBe(1);
+  });
+
+  it('merges duplicate rows within one screenshot into a single lot with a quantity', async () => {
+    const createEventRes = await fetch(`${baseUrl}/api/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-telegram-init-data': adminInitData },
+      body: JSON.stringify({ title: 'Ивент dup', durationMinutes: 25 }),
+    });
+    const { id: eventId } = await createEventRes.json();
+
+    // Both rows solid red — same item repeated, as a common drop would look.
+    const imageBuffer = await sharp({
+      create: { width: 300, height: 120, channels: 3, background: { r: 209, g: 67, b: 78 } },
+    })
+      .png()
+      .toBuffer();
+
+    const form = new FormData();
     form.append('rows', '2');
     form.append('template', 'feast');
     form.append('file', new Blob([imageBuffer], { type: 'image/png' }), 'reward.png');
@@ -59,15 +96,14 @@ describe('POST /api/events/:id/screenshots', () => {
 
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.itemIds).toHaveLength(2);
+    expect(body.itemIds).toHaveLength(1); // 2 identical-looking rows -> 1 lot
 
-    const row = db.prepare('SELECT image_path, color, name FROM items WHERE id = ?').get(body.itemIds[0]) as any;
-    expect(row.image_path.startsWith('items/')).toBe(true);
-    expect(row.color).toBe('red'); // matches the solid-red fixture, no polling needed
-    expect(row.name).toBe(''); // manual-only field, never auto-filled
+    const row = db.prepare('SELECT quantity, color FROM items WHERE id = ?').get(body.itemIds[0]) as any;
+    expect(row.quantity).toBe(2);
+    expect(row.color).toBe('red');
   });
 
-  it('accepts multiple files in one request and slices every one of them', async () => {
+  it('accepts multiple files in one request, slicing and deduping across all of them', async () => {
     const createEventRes = await fetch(`${baseUrl}/api/events`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-telegram-init-data': adminInitData },
@@ -75,6 +111,47 @@ describe('POST /api/events/:id/screenshots', () => {
     });
     const { id: eventId } = await createEventRes.json();
 
+    // Different colors so each file's row stays a distinct lot (dedup shouldn't merge
+    // genuinely different items just because they arrived in the same request).
+    const imageA = await sharp({ create: { width: 300, height: 60, channels: 3, background: { r: 0, g: 0, b: 0 } } })
+      .png()
+      .toBuffer();
+    const imageB = await sharp({ create: { width: 300, height: 90, channels: 3, background: { r: 255, g: 255, b: 0 } } })
+      .png()
+      .toBuffer();
+
+    const form = new FormData();
+    form.append('rows', '1');
+    form.append('template', 'feast');
+    form.append('file', new Blob([imageA], { type: 'image/png' }), 'a.png');
+    form.append('file', new Blob([imageB], { type: 'image/png' }), 'b.png');
+
+    const res = await fetch(`${baseUrl}/api/events/${eventId}/screenshots`, {
+      method: 'POST',
+      headers: { 'x-telegram-init-data': adminInitData },
+      body: form,
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.itemIds).toHaveLength(2); // 1 row from each of the 2 files, visually distinct
+
+    const screenshotCount = db.prepare('SELECT COUNT(*) as c FROM screenshots WHERE event_id = ?').get(eventId) as {
+      c: number;
+    };
+    expect(screenshotCount.c).toBe(2);
+  });
+
+  it('merges a duplicate row across two different files in the same upload', async () => {
+    const createEventRes = await fetch(`${baseUrl}/api/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-telegram-init-data': adminInitData },
+      body: JSON.stringify({ title: 'Ивент cross-file dup', durationMinutes: 25 }),
+    });
+    const { id: eventId } = await createEventRes.json();
+
+    // Same solid color in both files — the admin selected two screenshots that both
+    // happen to show the same common drop.
     const imageA = await sharp({ create: { width: 300, height: 60, channels: 3, background: { r: 0, g: 0, b: 0 } } })
       .png()
       .toBuffer();
@@ -96,12 +173,10 @@ describe('POST /api/events/:id/screenshots', () => {
 
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.itemIds).toHaveLength(2); // 1 row from each of the 2 files
+    expect(body.itemIds).toHaveLength(1);
 
-    const screenshotCount = db.prepare('SELECT COUNT(*) as c FROM screenshots WHERE event_id = ?').get(eventId) as {
-      c: number;
-    };
-    expect(screenshotCount.c).toBe(2);
+    const row = db.prepare('SELECT quantity FROM items WHERE id = ?').get(body.itemIds[0]) as any;
+    expect(row.quantity).toBe(2);
   });
 
   it('crops the item image down to just the icon badge for templates with a measured iconBox', async () => {
