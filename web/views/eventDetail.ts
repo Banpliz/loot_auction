@@ -4,13 +4,19 @@ import { getTelegramWebApp } from '../telegram';
 import { escapeHtml } from '../escape-html';
 import { ITEM_COLORS, colorHex } from '../format';
 
+interface Winner {
+  telegramId: number;
+  nickname: string | null;
+}
+
 interface AdminItem {
   id: number;
   name: string;
   color: string;
+  quantity: number;
   imagePath: string;
   status: 'pool' | 'auctioned' | 'removed';
-  winnerNickname: string | null;
+  winners: Winner[];
 }
 
 const STATUS_LABEL: Record<string, string> = { pool: 'В пуле', auctioned: 'Разыграно', removed: 'Убран' };
@@ -59,7 +65,10 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
         проверь и поправь, если распозналось не то. Название не распознаётся
         автоматически — впиши вручную только если по иконке не понятно, что за лот
         (например, у сундуков одного вида, но разного уровня). Цену не показываем —
-        участники и так видят её в игре.
+        участники и так видят её в игре. Если один и тот же предмет встречается на
+        скринах несколько раз — удали лишние лоты и впиши общее количество в поле
+        «Кол-во» у одного оставшегося: участники ставят на него один раз, а при
+        розыгрыше система сама выберет нужное число победителей из всех, кто поставил.
       </p>
       <form id="screenshot-form">
         <div class="field-row">
@@ -105,12 +114,17 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
         <div class="admin-item" data-id="${item.id}" style="border-left: 4px solid ${colorHex(item.color)}">
           <img src="/uploads/${item.imagePath}" />
           <input value="${escapeHtml(item.name)}" data-role="name" placeholder="Пометка (не обязательно, напр. «III»)" />
-          <select data-role="color">
-            ${ITEM_COLORS.map(
-              (c) => `<option value="${c.value}" ${item.color === c.value ? 'selected' : ''}>${c.label}</option>`
-            ).join('')}
-          </select>
-          <span class="status-pill">${STATUS_LABEL[item.status]}${item.winnerNickname ? ' · ' + escapeHtml(item.winnerNickname) : ''}</span>
+          <div class="field-row">
+            <input value="${item.quantity}" data-role="quantity" type="number" min="1" placeholder="Кол-во" />
+            <select data-role="color">
+              ${ITEM_COLORS.map(
+                (c) => `<option value="${c.value}" ${item.color === c.value ? 'selected' : ''}>${c.label}</option>`
+              ).join('')}
+            </select>
+          </div>
+          <span class="status-pill">${STATUS_LABEL[item.status]}${
+            item.winners.length > 0 ? ' · ' + item.winners.map((w) => escapeHtml(w.nickname ?? '—')).join(', ') : ''
+          }</span>
           <div class="admin-item-actions">
             <button class="btn-secondary btn-sm" data-action="save">Сохранить</button>
             <button class="btn-danger btn-sm" data-action="remove">Убрать</button>
@@ -124,11 +138,12 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
         const itemEl = button.closest('.admin-item') as HTMLElement;
         const name = (itemEl.querySelector('[data-role="name"]') as HTMLInputElement).value;
         const color = (itemEl.querySelector('[data-role="color"]') as HTMLSelectElement).value;
+        const quantity = Number((itemEl.querySelector('[data-role="quantity"]') as HTMLInputElement).value) || 1;
         try {
           await apiFetch(`/items/${itemEl.dataset.id}`, {
             method: 'PUT',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ name, color }),
+            body: JSON.stringify({ name, color, quantity }),
           });
         } catch (err) {
           (root.querySelector('#upload-error') as HTMLElement).textContent = (err as Error).message;

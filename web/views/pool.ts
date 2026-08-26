@@ -3,13 +3,19 @@ import { apiFetch } from '../api';
 import { escapeHtml } from '../escape-html';
 import { colorHex } from '../format';
 
+interface Winner {
+  telegramId: number;
+  nickname: string | null;
+}
+
 interface Item {
   id: number;
   name: string;
   color: string;
+  quantity: number;
   imagePath: string;
   status: 'pool' | 'auctioned' | 'removed';
-  winnerNickname: string | null;
+  winners: Winner[];
   claimedByMe: number;
 }
 
@@ -52,10 +58,13 @@ export async function renderPool(root: HTMLElement) {
   const renderItem = (item: Item) => `
       <div class="lot-row" data-id="${item.id}" style="border-left: 4px solid ${colorHex(item.color)}">
         <img src="/uploads/${item.imagePath}" alt="${escapeHtml(item.name) || 'Лот'}" />
-        ${item.name ? `<div class="lot-row__info"><p class="lot-row__name">${escapeHtml(item.name)}</p></div>` : ''}
+        <div class="lot-row__info">
+          ${item.name ? `<p class="lot-row__name">${escapeHtml(item.name)}</p>` : ''}
+          ${item.quantity > 1 ? `<span class="qty-tag">×${item.quantity}</span>` : ''}
+        </div>
         ${
           item.status === 'auctioned'
-            ? `<p class="badge">Разыграно: ${item.winnerNickname ? escapeHtml(item.winnerNickname) : '—'}</p>`
+            ? `<p class="badge">Разыграно: ${item.winners.length > 0 ? item.winners.map((w) => escapeHtml(w.nickname ?? '—')).join(', ') : '—'}</p>`
             : `<button data-action="${item.claimedByMe ? 'unclaim' : 'claim'}" class="btn-sm ${item.claimedByMe ? 'btn-secondary' : ''}">${
                 item.claimedByMe ? 'Отменить' : 'Ставка'
               }</button>`

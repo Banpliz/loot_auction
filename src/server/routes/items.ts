@@ -5,17 +5,21 @@ import { requireAdmin } from '../auth';
 const VALID_COLORS = new Set(['blue', 'purple', 'red']);
 
 export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
-  app.put<{ Params: { id: string }; Body: { name?: string; color?: string } }>(
+  app.put<{ Params: { id: string }; Body: { name?: string; color?: string; quantity?: number } }>(
     '/items/:id',
     { preHandler: requireAdmin(deps) },
     async (request, reply) => {
-      const { name, color } = request.body ?? {};
-      if (name === undefined && color === undefined) {
-        reply.code(400).send({ error: 'at least one of name, color is required' });
+      const { name, color, quantity } = request.body ?? {};
+      if (name === undefined && color === undefined && quantity === undefined) {
+        reply.code(400).send({ error: 'at least one of name, color, quantity is required' });
         return;
       }
       if (color !== undefined && !VALID_COLORS.has(color)) {
         reply.code(400).send({ error: 'color must be blue, purple, or red' });
+        return;
+      }
+      if (quantity !== undefined && (!Number.isInteger(quantity) || quantity < 1)) {
+        reply.code(400).send({ error: 'quantity must be a positive integer' });
         return;
       }
 
@@ -29,6 +33,10 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
       if (color !== undefined) {
         updates.push('color = ?');
         values.push(color);
+      }
+      if (quantity !== undefined) {
+        updates.push('quantity = ?');
+        values.push(quantity);
       }
 
       values.push(Number(request.params.id));

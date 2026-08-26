@@ -284,6 +284,17 @@ button {
   white-space: nowrap;
 }
 
+.qty-tag {
+  display: inline-block;
+  margin-top: 0.2rem;
+  background: var(--primary-tint);
+  color: var(--primary-hover);
+  font-weight: 700;
+  font-size: 0.78rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+}
+
 .lot-row .badge {
   flex-shrink: 0;
 }
@@ -314,7 +325,8 @@ button {
   font-size: 0.88rem;
 }
 
-.admin-item input[data-role="name"] {
+.admin-item input[data-role="name"],
+.admin-item input[data-role="quantity"] {
   font-size: 0.85rem;
 }
 

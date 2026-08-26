@@ -78,8 +78,7 @@ describe('events routes', () => {
 
     const claimed = body.items.find((i: any) => i.id === claimedItem.lastInsertRowid);
     expect(claimed.status).toBe('auctioned');
-    expect(claimed.winnerTelegramId).toBe(2);
-    expect(claimed.winnerNickname).toBe('Bob');
+    expect(claimed.winners).toEqual([{ telegramId: 2, nickname: 'Bob' }]);
 
     const unclaimed = body.items.find((i: any) => i.id === unclaimedItem.lastInsertRowid);
     expect(unclaimed.status).toBe('pool');
@@ -126,18 +125,72 @@ describe('events routes', () => {
     });
     expect(resolveRes.statusCode).toBe(200);
 
-    const rows = db
-      .prepare('SELECT color, winner_telegram_id as winner, status FROM items WHERE event_id = ?')
-      .all(eventId) as { color: string; winner: number | null; status: string }[];
+    const rows = db.prepare('SELECT id, color, status FROM items WHERE event_id = ?').all(eventId) as {
+      id: number;
+      color: string;
+      status: string;
+    }[];
+    const wonItemIds = new Set(
+      (db.prepare('SELECT item_id FROM item_winners WHERE telegram_id = 2').all() as { item_id: number }[]).map(
+        (r) => r.item_id
+      )
+    );
 
-    const purpleRedWins = rows.filter((r) => r.color !== 'blue' && r.winner === 2).length;
-    const blueWins = rows.filter((r) => r.color === 'blue' && r.winner === 2).length;
+    const purpleRedWins = rows.filter((r) => r.color !== 'blue' && wonItemIds.has(r.id)).length;
+    const blueWins = rows.filter((r) => r.color === 'blue' && wonItemIds.has(r.id)).length;
     expect(purpleRedWins).toBe(1);
     expect(blueWins).toBe(2);
 
     const unresolvedCount = rows.filter((r) => r.status === 'pool').length;
     expect(unresolvedCount).toBe(3);
     expect(rows.filter((r) => r.status === 'auctioned')).toHaveLength(3);
+  });
+
+  it('draws up to quantity distinct winners for a single lot from everyone who bid on it', async () => {
+    db.prepare("INSERT INTO users (telegram_id, username, game_nickname) VALUES (3, 'alice', 'Alice')").run();
+    db.prepare("INSERT INTO users (telegram_id, username, game_nickname) VALUES (4, 'carl', 'Carl')").run();
+
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/events',
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { title: 'Ивент qty', durationMinutes: 25 },
+    });
+    const eventId = createRes.json().id;
+
+    const screenshot = db
+      .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
+      .run(eventId, '/tmp/original-qty.png');
+    const item = db
+      .prepare(
+        "INSERT INTO items (event_id, screenshot_id, name, image_path, status, color, quantity) VALUES (?, ?, 'Орк-шаман', 'items/x.png', 'pool', 'blue', 2)"
+      )
+      .run(eventId, screenshot.lastInsertRowid);
+    const itemId = item.lastInsertRowid as number;
+
+    // 3 bidders (one bid each, per-item claim) for a lot that only has 2 to give away.
+    for (const telegramId of [2, 3, 4]) {
+      db.prepare('INSERT INTO claims (item_id, telegram_id) VALUES (?, ?)').run(itemId, telegramId);
+    }
+
+    const resolveRes = await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/resolve`,
+      headers: { 'x-telegram-init-data': adminInitData },
+    });
+    expect(resolveRes.statusCode).toBe(200);
+
+    const winners = db.prepare('SELECT telegram_id FROM item_winners WHERE item_id = ?').all(itemId) as {
+      telegram_id: number;
+    }[];
+    // Exactly 2 distinct winners, both from among the 3 bidders — never more than
+    // quantity, and never the same person twice (each bidder has only one claim row).
+    expect(winners).toHaveLength(2);
+    expect(new Set(winners.map((w) => w.telegram_id)).size).toBe(2);
+    for (const w of winners) expect([2, 3, 4]).toContain(w.telegram_id);
+
+    const row = db.prepare('SELECT status FROM items WHERE id = ?').get(itemId) as { status: string };
+    expect(row.status).toBe('auctioned');
   });
 
   it('falls back to an eligible second bidder once the first bidder is capped out on a color group', async () => {
@@ -176,12 +229,17 @@ describe('events routes', () => {
     });
     expect(resolveRes.statusCode).toBe(200);
 
-    const rows = db
-      .prepare('SELECT winner_telegram_id as winner, status FROM items WHERE event_id = ?')
-      .all(eventId) as { winner: number | null; status: string }[];
-
+    const rows = db.prepare('SELECT id, status FROM items WHERE event_id = ?').all(eventId) as {
+      id: number;
+      status: string;
+    }[];
     expect(rows.every((r) => r.status === 'auctioned')).toBe(true);
-    const winners = rows.map((r) => r.winner).sort();
+
+    const winners = (db.prepare('SELECT telegram_id FROM item_winners WHERE item_id IN (?, ?)').all(rows[0].id, rows[1].id) as {
+      telegram_id: number;
+    }[])
+      .map((r) => r.telegram_id)
+      .sort();
     expect(winners).toEqual([2, 3]);
   });
 
@@ -209,11 +267,12 @@ describe('events routes', () => {
     });
     expect(firstResolve.statusCode).toBe(200);
 
-    const afterFirst = db
-      .prepare('SELECT winner_telegram_id as winner, status FROM items WHERE id = ?')
-      .get(item.lastInsertRowid) as { winner: number | null; status: string };
+    const afterFirst = db.prepare('SELECT status FROM items WHERE id = ?').get(item.lastInsertRowid) as {
+      status: string;
+    };
+    const winnersAfterFirst = db.prepare('SELECT telegram_id FROM item_winners WHERE item_id = ?').all(item.lastInsertRowid);
     expect(afterFirst.status).toBe('auctioned');
-    expect(afterFirst.winner).toBe(2);
+    expect(winnersAfterFirst).toEqual([{ telegram_id: 2 }]);
 
     const secondResolve = await app.inject({
       method: 'POST',
@@ -222,10 +281,12 @@ describe('events routes', () => {
     });
     expect(secondResolve.statusCode).toBe(409);
 
-    const afterSecond = db
-      .prepare('SELECT winner_telegram_id as winner, status FROM items WHERE id = ?')
-      .get(item.lastInsertRowid) as { winner: number | null; status: string };
+    const afterSecond = db.prepare('SELECT status FROM items WHERE id = ?').get(item.lastInsertRowid) as {
+      status: string;
+    };
+    const winnersAfterSecond = db.prepare('SELECT telegram_id FROM item_winners WHERE item_id = ?').all(item.lastInsertRowid);
     expect(afterSecond).toEqual(afterFirst);
+    expect(winnersAfterSecond).toEqual(winnersAfterFirst);
   });
 
   it('GET /events lists all events with item counts, admin-only', async () => {

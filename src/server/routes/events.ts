@@ -19,9 +19,36 @@ function colorGroup(color: string): ColorGroup {
   return color === 'blue' ? 'blue' : 'purpleRed';
 }
 
-const ITEM_COLUMNS = `i.id, i.name, i.color, i.image_path as imagePath, i.status,
-                i.winner_telegram_id as winnerTelegramId,
-                w.game_nickname as winnerNickname`;
+const ITEM_COLUMNS = `i.id, i.name, i.color, i.quantity, i.image_path as imagePath, i.status`;
+
+interface Winner {
+  telegramId: number;
+  nickname: string | null;
+}
+
+// Attaches a `winners` array to each item (one entry per person a multi-quantity lot
+// drew) — a separate query instead of a JOIN because a lot can have several winners,
+// which a single-row-per-item JOIN can't represent without duplicating the other columns.
+function attachWinners<T extends { id: number }>(deps: AppDeps, items: T[]): (T & { winners: Winner[] })[] {
+  if (items.length === 0) return [];
+  const placeholders = items.map(() => '?').join(',');
+  const rows = deps.db
+    .prepare(
+      `SELECT iw.item_id as itemId, u.telegram_id as telegramId, u.game_nickname as nickname
+       FROM item_winners iw
+       LEFT JOIN users u ON u.telegram_id = iw.telegram_id
+       WHERE iw.item_id IN (${placeholders})`
+    )
+    .all(...items.map((i) => i.id)) as { itemId: number; telegramId: number; nickname: string | null }[];
+
+  const winnersByItem = new Map<number, Winner[]>();
+  for (const row of rows) {
+    const list = winnersByItem.get(row.itemId) ?? [];
+    list.push({ telegramId: row.telegramId, nickname: row.nickname });
+    winnersByItem.set(row.itemId, list);
+  }
+  return items.map((item) => ({ ...item, winners: winnersByItem.get(item.id) ?? [] }));
+}
 
 export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
   app.post<{ Body: { title: string; durationMinutes: number } }>(
@@ -84,15 +111,14 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
         `SELECT ${ITEM_COLUMNS},
                 EXISTS(SELECT 1 FROM claims c WHERE c.item_id = i.id AND c.telegram_id = ?) as claimedByMe
          FROM items i
-         LEFT JOIN users w ON w.telegram_id = i.winner_telegram_id
          WHERE i.event_id = ? AND i.status != 'removed'
          ORDER BY i.id`
       )
-      .all(userId, event.id);
+      .all(userId, event.id) as { id: number }[];
 
     return {
       event: { id: event.id, title: event.title, deadlineAt: event.deadline_at, status: event.status },
-      items,
+      items: attachWinners(deps, items),
     };
   });
 
@@ -107,15 +133,14 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
       .prepare(
         `SELECT ${ITEM_COLUMNS}
          FROM items i
-         LEFT JOIN users w ON w.telegram_id = i.winner_telegram_id
          WHERE i.event_id = ? AND i.status != 'removed'
          ORDER BY i.id`
       )
-      .all(eventId);
+      .all(eventId) as { id: number }[];
 
     return {
       event: { id: event.id, title: event.title, deadlineAt: event.deadline_at, status: event.status },
-      items,
+      items: attachWinners(deps, items),
     };
   });
 
@@ -136,31 +161,39 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
         return;
       }
 
+      const insertWinner = deps.db.prepare('INSERT INTO item_winners (item_id, telegram_id) VALUES (?, ?)');
+      const markAuctioned = deps.db.prepare("UPDATE items SET status = 'auctioned', auctioned_at = datetime('now') WHERE id = ?");
+
       const resolveAll = deps.db.transaction(() => {
         const poolItems = deps.db
-          .prepare("SELECT id, color FROM items WHERE event_id = ? AND status = 'pool'")
-          .all(eventId) as { id: number; color: string }[];
+          .prepare("SELECT id, color, quantity FROM items WHERE event_id = ? AND status = 'pool'")
+          .all(eventId) as { id: number; color: string; quantity: number }[];
 
         const winCounts = new Map<number, Record<ColorGroup, number>>();
 
         for (const item of shuffle(poolItems)) {
-          const claimants = deps.db.prepare('SELECT telegram_id FROM claims WHERE item_id = ?').all(item.id) as {
+          // One bid per person per item (claims' own UNIQUE), so drawing without
+          // replacement here can never pick the same person twice for this item.
+          let remaining = deps.db.prepare('SELECT telegram_id FROM claims WHERE item_id = ?').all(item.id) as {
             telegram_id: number;
           }[];
           const group = colorGroup(item.color);
-          const eligible = claimants.filter((c) => (winCounts.get(c.telegram_id)?.[group] ?? 0) < WIN_LIMITS[group]);
-          const winner = pickRandom(eligible);
-          if (!winner) continue;
 
-          deps.db
-            .prepare(
-              "UPDATE items SET status = 'auctioned', winner_telegram_id = ?, auctioned_at = datetime('now') WHERE id = ?"
-            )
-            .run(winner.telegram_id, item.id);
+          let wins = 0;
+          for (let i = 0; i < item.quantity; i++) {
+            const eligible = remaining.filter((c) => (winCounts.get(c.telegram_id)?.[group] ?? 0) < WIN_LIMITS[group]);
+            const winner = pickRandom(eligible);
+            if (!winner) break; // no claimant left who hasn't already hit their color cap
 
-          const counts = winCounts.get(winner.telegram_id) ?? { purpleRed: 0, blue: 0 };
-          counts[group] += 1;
-          winCounts.set(winner.telegram_id, counts);
+            insertWinner.run(item.id, winner.telegram_id);
+            remaining = remaining.filter((c) => c.telegram_id !== winner.telegram_id);
+            wins++;
+
+            const counts = winCounts.get(winner.telegram_id) ?? { purpleRed: 0, blue: 0 };
+            counts[group] += 1;
+            winCounts.set(winner.telegram_id, counts);
+          }
+          if (wins > 0) markAuctioned.run(item.id);
         }
 
         deps.db.prepare("UPDATE events SET status = 'resolved' WHERE id = ?").run(eventId);

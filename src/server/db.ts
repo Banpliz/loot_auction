@@ -24,6 +24,18 @@ function migrate(db: Db) {
       DROP TABLE IF EXISTS price_tiers;
     `);
   }
+  // Same reasoning: items.winner_telegram_id (single winner) can't represent a lot with
+  // quantity > 1 (several winners drawn from the same claimant pool) — replaced by the
+  // item_winners table below. Still no real production data, so reset again rather than
+  // migrate the column.
+  if (existingItemColumns.some((c) => c.name === 'winner_telegram_id')) {
+    db.exec(`
+      DROP TABLE IF EXISTS item_winners;
+      DROP TABLE IF EXISTS claims;
+      DROP TABLE IF EXISTS items;
+      DROP TABLE IF EXISTS screenshots;
+    `);
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -58,9 +70,9 @@ function migrate(db: Db) {
       name TEXT NOT NULL DEFAULT '',
       price TEXT NOT NULL DEFAULT '',
       color TEXT NOT NULL DEFAULT 'blue',
+      quantity INTEGER NOT NULL DEFAULT 1,
       image_path TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pool',
-      winner_telegram_id INTEGER REFERENCES users(telegram_id),
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       auctioned_at TEXT
     );
@@ -70,6 +82,16 @@ function migrate(db: Db) {
       item_id INTEGER NOT NULL REFERENCES items(id),
       telegram_id INTEGER NOT NULL REFERENCES users(telegram_id),
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(item_id, telegram_id)
+    );
+
+    -- A lot with quantity > 1 draws that many distinct winners from its claimants
+    -- (still one bid per person per item, enforced by claims' own UNIQUE) instead
+    -- of the single winner_telegram_id this replaced.
+    CREATE TABLE IF NOT EXISTS item_winners (
+      id INTEGER PRIMARY KEY,
+      item_id INTEGER NOT NULL REFERENCES items(id),
+      telegram_id INTEGER NOT NULL REFERENCES users(telegram_id),
       UNIQUE(item_id, telegram_id)
     );
   `);
