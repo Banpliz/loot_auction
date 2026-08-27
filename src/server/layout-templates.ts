@@ -44,21 +44,25 @@ export interface LayoutTemplate {
   iconBox?: Box;
 }
 
-// ponytail: feast's coordinates are still estimated by eye from screenshots
-// the admin sent, not measured pixel-exact like invasion's now are — the
-// admin's manual review/edit is the safety net for whatever this misses;
-// only touch feast's numbers if extraction is drifting consistently across
-// many uploads, not for one-off misses (or measure it the same way once a
-// real feast screenshot is available).
 export const LAYOUT_TEMPLATES: Record<Template, LayoutTemplate> = {
   feast: {
-    // Header = status bar + "Пир победы" balance bar + subtitle text + tier
-    // badges row, ending where the "Посмотреть/Все" panel starts — shorter
-    // than invasion's, about 6-7 rows fit below it per screenshot vs ~4.
-    contentTop: 0.43,
-    // Same row-unit shape as invasion (countdown pill above an item card),
-    // just a bit more compact — icon frames sit slightly further left.
-    colorSample: { x: 0.08, y: 0.62 },
+    // Measured pixel-exact from a real 1177x2560 "Пир победы" screenshot
+    // (2026-08-27), same method as invasion below: row-unit (countdown pill)
+    // tops at y=712/972/1231/1491/1750/2010 → contentTop=712/2560,
+    // rowHeight=(2010-712)/5/2560. The old eyeballed contentTop=0.43 was
+    // close by coincidence-ish but still off by several rows' worth of drift
+    // by the time it reached the last row of a long list.
+    contentTop: 0.278,
+    rowHeight: 0.1014,
+    // Sampled at the icon frame's inner-left border, clear of both the
+    // corner level/material badges and the center sprite art (which can be
+    // any color) — verified to classify as the item's real rarity color
+    // across every row in the reference screenshot.
+    colorSample: { x: 0.13, y: 0.65 },
+    // The rarity-framed icon badge (level pill + sprite), left/right edges at
+    // x=136/311 of 1177, top/bottom at row-offset 58/220 of a 259.5 row.
+    // Measured the same way as contentTop/rowHeight above.
+    iconBox: { x: 0.115, y: 0.223, w: 0.149, h: 0.626 },
   },
   invasion: {
     // Measured pixel-exact from a real 720x1565 "Аукцион вторжения"

@@ -36,7 +36,6 @@ function migrate(db: Db) {
       DROP TABLE IF EXISTS screenshots;
     `);
   }
-
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       telegram_id INTEGER PRIMARY KEY,
@@ -70,6 +69,7 @@ function migrate(db: Db) {
       name TEXT NOT NULL DEFAULT '',
       price TEXT NOT NULL DEFAULT '',
       color TEXT NOT NULL DEFAULT 'blue',
+      category TEXT NOT NULL DEFAULT 'item',
       quantity INTEGER NOT NULL DEFAULT 1,
       image_path TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pool',
@@ -95,4 +95,14 @@ function migrate(db: Db) {
       UNIQUE(item_id, telegram_id)
     );
   `);
+
+  // Additive column (feast's per-category win limit, see events.ts) — a plain ALTER
+  // instead of the drop+recreate above, since this one doesn't change any existing
+  // column's meaning and there's no reason to lose real lots over it. Runs after the
+  // CREATE TABLEs above so a fresh items table (already created with `category` in
+  // its schema) is never re-altered.
+  const itemColumns = db.prepare('PRAGMA table_info(items)').all() as { name: string }[];
+  if (!itemColumns.some((c) => c.name === 'category')) {
+    db.exec(`ALTER TABLE items ADD COLUMN category TEXT NOT NULL DEFAULT 'item'`);
+  }
 }

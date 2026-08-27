@@ -77,6 +77,26 @@ describe('items routes', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it('PUT /items/:id updates category and rejects an invalid one', async () => {
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/api/items/${itemAId}`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { category: 'stone' },
+    });
+    expect(res.statusCode).toBe(200);
+    const row = db.prepare('SELECT category FROM items WHERE id = ?').get(itemAId) as any;
+    expect(row.category).toBe('stone');
+
+    const invalid = await app.inject({
+      method: 'PUT',
+      url: `/api/items/${itemAId}`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { category: 'weapon' },
+    });
+    expect(invalid.statusCode).toBe(400);
+  });
+
   it('DELETE /items/:id soft-removes the item', async () => {
     await app.inject({ method: 'DELETE', url: `/api/items/${itemAId}`, headers: { 'x-telegram-init-data': adminInitData } });
     const row = db.prepare('SELECT status FROM items WHERE id = ?').get(itemAId) as any;
@@ -108,5 +128,68 @@ describe('items routes', () => {
     await app.inject({ method: 'POST', url: `/api/items/${itemAId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
     const row = db.prepare('SELECT COUNT(*) as count FROM claims WHERE item_id = ? AND telegram_id = 2').get(itemAId) as any;
     expect(row.count).toBe(1);
+  });
+
+  it('POST /items/:id/merge folds the source lot into the target and carries its bidders over', async () => {
+    db.prepare('UPDATE items SET quantity = 3 WHERE id = ?').run(itemAId);
+    db.prepare('UPDATE items SET quantity = 2 WHERE id = ?').run(itemBId);
+    await app.inject({ method: 'POST', url: `/api/items/${itemAId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
+    await app.inject({ method: 'POST', url: `/api/items/${itemBId}/claim`, headers: { 'x-telegram-init-data': bobInitData } });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/items/${itemAId}/merge`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { intoId: itemBId },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const source = db.prepare('SELECT status FROM items WHERE id = ?').get(itemAId) as any;
+    expect(source.status).toBe('removed');
+
+    const target = db.prepare('SELECT quantity FROM items WHERE id = ?').get(itemBId) as any;
+    expect(target.quantity).toBe(5); // 3 + 2
+
+    const claimants = (db.prepare('SELECT telegram_id FROM claims WHERE item_id = ?').all(itemBId) as any[])
+      .map((r) => r.telegram_id)
+      .sort();
+    expect(claimants).toEqual([2, 3]); // alice's bid on A carried over, bob's on B kept
+    expect(db.prepare('SELECT COUNT(*) as c FROM claims WHERE item_id = ?').get(itemAId)).toMatchObject({ c: 0 });
+  });
+
+  it('POST /items/:id/merge dedupes a bidder who had claimed both lots', async () => {
+    await app.inject({ method: 'POST', url: `/api/items/${itemAId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
+    await app.inject({ method: 'POST', url: `/api/items/${itemBId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/items/${itemAId}/merge`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { intoId: itemBId },
+    });
+
+    const row = db.prepare('SELECT COUNT(*) as c FROM claims WHERE item_id = ? AND telegram_id = 2').get(itemBId) as any;
+    expect(row.c).toBe(1);
+  });
+
+  it('POST /items/:id/merge is admin-only', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/items/${itemAId}/merge`,
+      headers: { 'x-telegram-init-data': aliceInitData, 'content-type': 'application/json' },
+      payload: { intoId: itemBId },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('POST /items/:id/merge rejects merging an already-auctioned lot', async () => {
+    db.prepare("UPDATE items SET status = 'auctioned' WHERE id = ?").run(itemBId);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/items/${itemAId}/merge`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { intoId: itemBId },
+    });
+    expect(res.statusCode).toBe(409);
   });
 });

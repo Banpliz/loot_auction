@@ -11,15 +11,32 @@ interface EventRow {
 }
 
 type ColorGroup = 'purpleRed' | 'blue';
+type CategoryGroup = 'item' | 'stone';
 
-// Fixed by design: purple+red combined cap at 1 win/person/event, blue at 2 — not admin-configurable.
-const WIN_LIMITS: Record<ColorGroup, number> = { purpleRed: 1, blue: 2 };
+// Fixed by design, not admin-configurable. Invasion caps by rarity color (purple+red
+// combined 1 win/person/event, blue 2). Feast's alliance rule cuts across colors instead
+// — gear (armor/weapons/etc.) capped at 1, tempering stones at 3 — so it's grouped by
+// admin-set item.category rather than color. The two schemes are independent counters:
+// a feast item's color never affects its cap, only its category does.
+const COLOR_WIN_LIMITS: Record<ColorGroup, number> = { purpleRed: 1, blue: 2 };
+const CATEGORY_WIN_LIMITS: Record<CategoryGroup, number> = { item: 1, stone: 3 };
 
 function colorGroup(color: string): ColorGroup {
   return color === 'blue' ? 'blue' : 'purpleRed';
 }
 
-const ITEM_COLUMNS = `i.id, i.name, i.color, i.quantity, i.image_path as imagePath, i.status`;
+// Returns a per-person counter key (namespaced so a color group and a category group
+// can never collide) plus the cap that applies to it.
+function winLimitGroup(template: string, color: string, category: string): { key: string; limit: number } {
+  if (template === 'feast') {
+    const group: CategoryGroup = category === 'stone' ? 'stone' : 'item';
+    return { key: `cat:${group}`, limit: CATEGORY_WIN_LIMITS[group] };
+  }
+  const group = colorGroup(color);
+  return { key: `color:${group}`, limit: COLOR_WIN_LIMITS[group] };
+}
+
+const ITEM_COLUMNS = `i.id, i.name, i.color, i.category, i.quantity, i.image_path as imagePath, i.status`;
 
 interface Winner {
   telegramId: number;
@@ -91,6 +108,9 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
     const deleteEvent = deps.db.transaction(() => {
       deps.db
         .prepare('DELETE FROM claims WHERE item_id IN (SELECT id FROM items WHERE event_id = ?)')
+        .run(eventId);
+      deps.db
+        .prepare('DELETE FROM item_winners WHERE item_id IN (SELECT id FROM items WHERE event_id = ?)')
         .run(eventId);
       deps.db.prepare('DELETE FROM items WHERE event_id = ?').run(eventId);
       deps.db.prepare('DELETE FROM screenshots WHERE event_id = ?').run(eventId);
@@ -166,10 +186,14 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
 
       const resolveAll = deps.db.transaction(() => {
         const poolItems = deps.db
-          .prepare("SELECT id, color, quantity FROM items WHERE event_id = ? AND status = 'pool'")
-          .all(eventId) as { id: number; color: string; quantity: number }[];
+          .prepare(
+            `SELECT i.id, i.color, i.category, i.quantity, s.template
+             FROM items i JOIN screenshots s ON s.id = i.screenshot_id
+             WHERE i.event_id = ? AND i.status = 'pool'`
+          )
+          .all(eventId) as { id: number; color: string; category: string; quantity: number; template: string }[];
 
-        const winCounts = new Map<number, Record<ColorGroup, number>>();
+        const winCounts = new Map<number, Map<string, number>>();
 
         for (const item of shuffle(poolItems)) {
           // One bid per person per item (claims' own UNIQUE), so drawing without
@@ -177,20 +201,20 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
           let remaining = deps.db.prepare('SELECT telegram_id FROM claims WHERE item_id = ?').all(item.id) as {
             telegram_id: number;
           }[];
-          const group = colorGroup(item.color);
+          const { key, limit } = winLimitGroup(item.template, item.color, item.category);
 
           let wins = 0;
           for (let i = 0; i < item.quantity; i++) {
-            const eligible = remaining.filter((c) => (winCounts.get(c.telegram_id)?.[group] ?? 0) < WIN_LIMITS[group]);
+            const eligible = remaining.filter((c) => (winCounts.get(c.telegram_id)?.get(key) ?? 0) < limit);
             const winner = pickRandom(eligible);
-            if (!winner) break; // no claimant left who hasn't already hit their color cap
+            if (!winner) break; // no claimant left who hasn't already hit their group's cap
 
             insertWinner.run(item.id, winner.telegram_id);
             remaining = remaining.filter((c) => c.telegram_id !== winner.telegram_id);
             wins++;
 
-            const counts = winCounts.get(winner.telegram_id) ?? { purpleRed: 0, blue: 0 };
-            counts[group] += 1;
+            const counts = winCounts.get(winner.telegram_id) ?? new Map<string, number>();
+            counts.set(key, (counts.get(key) ?? 0) + 1);
             winCounts.set(winner.telegram_id, counts);
           }
           if (wins > 0) markAuctioned.run(item.id);

@@ -2,7 +2,7 @@
 import { apiFetch } from '../api';
 import { getTelegramWebApp } from '../telegram';
 import { escapeHtml } from '../escape-html';
-import { ITEM_COLORS, colorHex } from '../format';
+import { ITEM_COLORS, ITEM_CATEGORIES, colorHex } from '../format';
 
 interface Winner {
   telegramId: number;
@@ -13,6 +13,7 @@ interface AdminItem {
   id: number;
   name: string;
   color: string;
+  category: string;
   quantity: number;
   imagePath: string;
   status: 'pool' | 'auctioned' | 'removed';
@@ -97,6 +98,11 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
   (root.querySelector('#back-btn') as HTMLButtonElement).addEventListener('click', onBack);
 
   let allItems: AdminItem[] = [];
+  // Set while admin is picking a merge target: escape hatch for dedup misses across
+  // separate screenshot uploads (see dedup.ts) — the algorithm can't always tell
+  // "same item, different photo" from "different item" reliably, so admin merges
+  // by hand. Click "Слить" on the duplicate, then "Сюда" on the lot to keep.
+  let mergeSourceId: number | null = null;
 
   function renderItemsFiltered(query: string) {
     const itemsEl = root.querySelector('#event-items') as HTMLElement;
@@ -110,9 +116,18 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
       return;
     }
     itemsEl.innerHTML = `<div class="items">${matches
-      .map(
-        (item) => `
-        <div class="admin-item" data-id="${item.id}" style="border-left: 4px solid ${colorHex(item.color)}">
+      .map((item) => {
+        const isSource = item.id === mergeSourceId;
+        const mergeButton =
+          item.status !== 'pool'
+            ? ''
+            : isSource
+              ? '<button class="btn-secondary btn-sm" data-action="merge-cancel">Отмена</button>'
+              : mergeSourceId !== null
+                ? '<button class="btn btn-sm" data-action="merge-target">Сюда</button>'
+                : '<button class="btn-secondary btn-sm" data-action="merge-start">Слить</button>';
+        return `
+        <div class="admin-item${isSource ? ' admin-item-merge-source' : ''}" data-id="${item.id}" style="border-left: 4px solid ${colorHex(item.color)}">
           <img src="/uploads/${item.imagePath}" />
           <input value="${escapeHtml(item.name)}" data-role="name" placeholder="Пометка (не обязательно, напр. «III»)" />
           <div class="field-row">
@@ -122,6 +137,11 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
                 (c) => `<option value="${c.value}" ${item.color === c.value ? 'selected' : ''}>${c.label}</option>`
               ).join('')}
             </select>
+            <select data-role="category" title="Только для пира победы: лимит на камни закалки — 3, на остальное — 1">
+              ${ITEM_CATEGORIES.map(
+                (c) => `<option value="${c.value}" ${item.category === c.value ? 'selected' : ''}>${c.label}</option>`
+              ).join('')}
+            </select>
           </div>
           <span class="status-pill">${STATUS_LABEL[item.status]}${
             item.winners.length > 0 ? ' · ' + item.winners.map((w) => escapeHtml(w.nickname ?? '—')).join(', ') : ''
@@ -129,9 +149,10 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
           <div class="admin-item-actions">
             <button class="btn-secondary btn-sm" data-action="save">Сохранить</button>
             <button class="btn-danger btn-sm" data-action="remove">Убрать</button>
+            ${mergeButton}
           </div>
-        </div>`
-      )
+        </div>`;
+      })
       .join('')}</div>`;
 
     itemsEl.querySelectorAll('[data-action="save"]').forEach((button) => {
@@ -139,12 +160,13 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
         const itemEl = button.closest('.admin-item') as HTMLElement;
         const name = (itemEl.querySelector('[data-role="name"]') as HTMLInputElement).value;
         const color = (itemEl.querySelector('[data-role="color"]') as HTMLSelectElement).value;
+        const category = (itemEl.querySelector('[data-role="category"]') as HTMLSelectElement).value;
         const quantity = Number((itemEl.querySelector('[data-role="quantity"]') as HTMLInputElement).value) || 1;
         try {
           await apiFetch(`/items/${itemEl.dataset.id}`, {
             method: 'PUT',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ name, color, quantity }),
+            body: JSON.stringify({ name, color, category, quantity }),
           });
         } catch (err) {
           (root.querySelector('#upload-error') as HTMLElement).textContent = (err as Error).message;
@@ -160,6 +182,40 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
           await loadItems();
         } catch (err) {
           (root.querySelector('#upload-error') as HTMLElement).textContent = (err as Error).message;
+        }
+      });
+    });
+
+    itemsEl.querySelectorAll('[data-action="merge-start"]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const itemEl = button.closest('.admin-item') as HTMLElement;
+        mergeSourceId = Number(itemEl.dataset.id);
+        renderItemsFiltered((root.querySelector('#lot-search') as HTMLInputElement).value);
+      });
+    });
+
+    itemsEl.querySelectorAll('[data-action="merge-cancel"]').forEach((button) => {
+      button.addEventListener('click', () => {
+        mergeSourceId = null;
+        renderItemsFiltered((root.querySelector('#lot-search') as HTMLInputElement).value);
+      });
+    });
+
+    itemsEl.querySelectorAll('[data-action="merge-target"]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const itemEl = button.closest('.admin-item') as HTMLElement;
+        const sourceId = mergeSourceId;
+        mergeSourceId = null;
+        try {
+          await apiFetch(`/items/${sourceId}/merge`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ intoId: Number(itemEl.dataset.id) }),
+          });
+          await loadItems();
+        } catch (err) {
+          (root.querySelector('#upload-error') as HTMLElement).textContent = (err as Error).message;
+          renderItemsFiltered((root.querySelector('#lot-search') as HTMLInputElement).value);
         }
       });
     });
