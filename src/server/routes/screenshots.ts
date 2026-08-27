@@ -112,9 +112,23 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
       // выгрузками скриншотов (тот же лот попал на два разных скрина) — поэтому
       // здесь ещё раз сверяем иконку с тем, что уже лежит в пуле этого ивента,
       // и вместо нового лота просто добавляем количество к найденному.
+      //
+      // Обязательно только среди лотов ТОГО ЖЕ шаблона: один ивент может
+      // содержать вперемешку лоты и пира, и вторжения (админ загружает оба на
+      // тест), а их иконки — из совершенно разных наборов рамок/фонов, так что
+      // сравнивать 16×16-отпечаток одного шаблона с другим — рулетка (порог 8
+      // рассчитан на JPEG-артефакты одного и того же скриншота, а не на
+      // совпадение между разными играми). Без фильтра по шаблону новый лот
+      // вторжения мог случайно "слиться" со старым лотом пира — новый лот не
+      // создавался, количество бампалось чужому, и в списке видна была старая
+      // картинка/цвет вместо только что загруженной (баг, найден 2026-08-28).
       const existingPoolItems = deps.db
-        .prepare("SELECT id, image_path as imagePath, quantity FROM items WHERE event_id = ? AND status = 'pool'")
-        .all(eventId) as { id: number; imagePath: string; quantity: number }[];
+        .prepare(
+          `SELECT i.id, i.image_path as imagePath, i.quantity
+           FROM items i JOIN screenshots s ON s.id = i.screenshot_id
+           WHERE i.event_id = ? AND i.status = 'pool' AND s.template = ?`
+        )
+        .all(eventId, template) as { id: number; imagePath: string; quantity: number }[];
       const existingSignatures = await Promise.all(
         existingPoolItems.map(async (item) => ({
           item,

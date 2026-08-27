@@ -126,6 +126,50 @@ describe('POST /api/events/:id/screenshots', () => {
     expect(row.category).toBe('stone');
   });
 
+  it('never merges lots across templates, even when their icons happen to look identical', async () => {
+    // Same event, same-looking icon, but uploaded once as feast and once as
+    // invasion — these must stay two separate lots. The admin does upload both
+    // templates into one event to test them side by side (bug found 2026-08-28:
+    // cross-upload dedup ignored template, so a new lot from one template could
+    // silently get folded into an unrelated lot from the other, showing the
+    // wrong picture/color and never creating the lot that was actually uploaded).
+    const solidPurple = await sharp({
+      create: { width: 300, height: 120, channels: 3, background: { r: 156, g: 74, b: 201 } },
+    })
+      .png()
+      .toBuffer();
+
+    const createEventRes = await fetch(`${baseUrl}/api/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-telegram-init-data': adminInitData },
+      body: JSON.stringify({ title: 'Ивент mixed', durationMinutes: 25 }),
+    });
+    const { id: eventId } = await createEventRes.json();
+
+    async function upload(templateName: string) {
+      const form = new FormData();
+      form.append('rows', '1');
+      form.append('template', templateName);
+      form.append('file', new Blob([solidPurple], { type: 'image/png' }), 'lot.png');
+      const res = await fetch(`${baseUrl}/api/events/${eventId}/screenshots`, {
+        method: 'POST',
+        headers: { 'x-telegram-init-data': adminInitData },
+        body: form,
+      });
+      return (await res.json()).itemIds[0] as number;
+    }
+
+    const feastItemId = await upload('feast');
+    const invasionItemId = await upload('invasion');
+
+    expect(feastItemId).not.toBe(invasionItemId);
+    const rows = db
+      .prepare("SELECT id, quantity FROM items WHERE event_id = ? AND status = 'pool'")
+      .all(eventId) as { id: number; quantity: number }[];
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.quantity === 1)).toBe(true);
+  });
+
   it('merges duplicate rows within one screenshot into a single lot with a quantity', async () => {
     const createEventRes = await fetch(`${baseUrl}/api/events`, {
       method: 'POST',
