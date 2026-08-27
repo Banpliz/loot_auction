@@ -6,7 +6,7 @@ import { requireAdmin } from '../auth';
 import { sliceImageToCells, cropBox } from '../grid-slice';
 import { isTemplate, LAYOUT_TEMPLATES } from '../layout-templates';
 import { detectColor } from '../color-detect';
-import { computeIconSignature, groupBySignature, type IconSignature } from '../dedup';
+import { computeIconSignature, groupBySignature, isSameIcon, isGenericChestIcon, type IconSignature } from '../dedup';
 
 interface SlicedRow {
   screenshotId: number;
@@ -104,11 +104,44 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
       const withSignatures = await Promise.all(
         slicedRows.map(async (row) => ({ signature: await computeIconSignature(row.imagePath), value: row }))
       );
+      const signatureByPath = new Map(withSignatures.map((s) => [s.value.imagePath, s.signature]));
       const groups = groupBySignature<SlicedRow>(withSignatures as { signature: IconSignature; value: SlicedRow }[]);
+
+      // Дубли бьют не только внутри одной загрузки, но и между отдельными
+      // выгрузками скриншотов (тот же лот попал на два разных скрина) — поэтому
+      // здесь ещё раз сверяем иконку с тем, что уже лежит в пуле этого ивента,
+      // и вместо нового лота просто добавляем количество к найденному.
+      const existingPoolItems = deps.db
+        .prepare("SELECT id, image_path as imagePath, quantity FROM items WHERE event_id = ? AND status = 'pool'")
+        .all(eventId) as { id: number; imagePath: string; quantity: number }[];
+      const existingSignatures = await Promise.all(
+        existingPoolItems.map(async (item) => ({
+          item,
+          signature: await computeIconSignature(path.join(uploadsDir, item.imagePath)),
+        }))
+      );
+      const bumpQuantity = deps.db.prepare('UPDATE items SET quantity = quantity + ? WHERE id = ?');
 
       const itemIds: number[] = [];
       for (const group of groups) {
         const representative = group[0];
+        const signature = signatureByPath.get(representative.imagePath)!;
+
+        // The generic chest icon is excluded from cross-upload matching (see
+        // isGenericChestIcon) — it looks identical across genuinely different
+        // chest lots, so treating repeats across separate uploads as "the same
+        // chest" would silently swallow real lots. Within this one upload,
+        // groupBySignature above still merged any true repeats normally.
+        const existingMatch = isGenericChestIcon(signature)
+          ? undefined
+          : existingSignatures.find((es) => isSameIcon(es.signature, signature));
+        if (existingMatch) {
+          bumpQuantity.run(group.length, existingMatch.item.id);
+          existingMatch.item.quantity += group.length;
+          itemIds.push(existingMatch.item.id);
+          continue;
+        }
+
         const relPath = path.relative(uploadsDir, representative.imagePath).split(path.sep).join('/');
 
         // Color detection is a plain pixel sample (no OCR, no network) — cheap enough
@@ -124,6 +157,7 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
           .run(eventId, representative.screenshotId, relPath, color, group.length)
           .lastInsertRowid as number;
         itemIds.push(itemId);
+        existingSignatures.push({ item: { id: itemId, imagePath: relPath, quantity: group.length }, signature });
       }
 
       return { itemIds };

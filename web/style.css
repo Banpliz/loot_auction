@@ -237,9 +237,16 @@ button {
 /* --- Item grid (admin editing) --- */
 .items {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 0.75rem;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.6rem;
   margin-top: 0.85rem;
+}
+
+/* Cards are narrow at 3-up, so quantity and color stack instead of squeezing
+   side by side (the color select's own text, e.g. "Фиолетовый", doesn't fit
+   next to a number input at a third of the previous card width). */
+.admin-item .field-row {
+  flex-direction: column;
 }
 
 /* --- Auction lot list (pool view): continuous scroll, one full-width row per lot --- */
@@ -299,6 +306,28 @@ button {
   flex-shrink: 0;
 }
 
+.winners {
+  flex-shrink: 0;
+}
+
+.winners summary {
+  cursor: pointer;
+  display: inline-block;
+  color: var(--success);
+  background: var(--success-tint);
+  font-weight: 700;
+  font-size: 0.82rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 999px;
+}
+
+.winners p {
+  margin: 0.35rem 0 0;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  text-align: right;
+}
+
 .item, .admin-item {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -332,11 +361,25 @@ button {
 
 .admin-item-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.35rem;
 }
 
 .admin-item-actions button {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Merge action (Слить/Сюда/Отмена) always gets its own full-width row — three
+   buttons side by side on a 140px card overflowed the card and spilled into
+   the grid gutter instead of wrapping. */
+.admin-item-actions button[data-action^='merge'] {
+  flex-basis: 100%;
+}
+
+.admin-item-merge-source {
+  outline: 2px solid var(--primary);
+  outline-offset: -1px;
 }
 
 .badge {
