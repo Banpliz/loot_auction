@@ -33,7 +33,6 @@ export async function renderPool(root: HTMLElement) {
 
   root.innerHTML = `
     <p id="deadline" class="countdown"></p>
-    <input id="search" type="search" placeholder="Поиск лота по названию…" />
     <div class="lots"></div>
   `;
 
@@ -43,7 +42,6 @@ export async function renderPool(root: HTMLElement) {
 
   const allItems = data.items as Item[];
   const listEl = root.querySelector('.lots') as HTMLElement;
-  const searchInput = root.querySelector('#search') as HTMLInputElement;
   const renderItem = (item: Item) => `
       <div class="lot-row" data-id="${item.id}" style="border-left: 4px solid ${colorHex(item.color)}">
         <img src="/uploads/${item.imagePath}" alt="${escapeHtml(item.name) || 'Лот'}" />
@@ -59,22 +57,16 @@ export async function renderPool(root: HTMLElement) {
                    <p>${item.winners.map((w) => escapeHtml(w.nickname ?? '—')).join(', ')}</p>
                  </details>`
               : `<p class="badge">Разыграно: —</p>`
-            : item.claimedByMe
-              ? `<button data-action="unclaim" class="btn-sm btn-secondary">Отменить</button>`
-              : biddingClosed
-                ? `<p class="badge">Приём заявок окончен</p>`
+            : biddingClosed
+              ? `<p class="badge">Приём заявок окончен</p>`
+              : item.claimedByMe
+                ? `<button data-action="unclaim" class="btn-sm btn-secondary">Отменить</button>`
                 : `<button data-action="claim" class="btn-sm">Ставка</button>`
         }
       </div>`;
 
-  function renderFiltered(query: string) {
-    const matches = allItems.filter((item) => item.name.toLowerCase().includes(query.trim().toLowerCase()));
-    listEl.innerHTML =
-      allItems.length === 0
-        ? '<p class="empty-state">Лоты ещё не загружены</p>'
-        : matches.length === 0
-          ? '<p class="empty-state">Ничего не найдено</p>'
-          : matches.map(renderItem).join('');
+  function renderList() {
+    listEl.innerHTML = allItems.length === 0 ? '<p class="empty-state">Лоты ещё не загружены</p>' : allItems.map(renderItem).join('');
 
     listEl.querySelectorAll('button').forEach((button) => {
       button.addEventListener('click', async () => {
@@ -88,7 +80,7 @@ export async function renderPool(root: HTMLElement) {
           // the user to scroll back down to find the lot they just bid on.
           const fresh = await apiFetch('/events/current');
           allItems.splice(0, allItems.length, ...(fresh.items as Item[]));
-          renderFiltered(searchInput.value);
+          renderList();
         } catch (err) {
           alert((err as Error).message);
         }
@@ -96,11 +88,7 @@ export async function renderPool(root: HTMLElement) {
     });
   }
 
-  searchInput.addEventListener('input', (e) => {
-    renderFiltered((e.target as HTMLInputElement).value);
-  });
-
-  renderFiltered('');
+  renderList();
 
   const updateCountdown = () => {
     if (!deadlineAt) {
@@ -113,10 +101,10 @@ export async function renderPool(root: HTMLElement) {
         ? `⏳ Приём заявок до ${deadlineAt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`
         : 'Приём заявок окончен';
     // Only the transition matters — re-rendering every tick would fight the user's
-    // scroll position and search input for no reason once nothing has changed.
+    // scroll position for no reason once nothing has changed.
     if (msLeft <= 0 && !biddingClosed) {
       biddingClosed = true;
-      renderFiltered(searchInput.value);
+      renderList();
     }
   };
   updateCountdown();

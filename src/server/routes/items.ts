@@ -8,6 +8,16 @@ import { rememberLot } from '../lot-library';
 const VALID_COLORS = new Set(['blue', 'purple', 'red']);
 const VALID_CATEGORIES = new Set(['item', 'stone']);
 
+// Once bidding closes, nothing about a claim should be changeable — not just no new
+// bids, but no withdrawing one either, so a bidder can't dodge a win-limit group by
+// pulling out right before the draw. Shared by both claim and unclaim below.
+function isPastDeadline(deps: AppDeps, eventId: number): boolean {
+  const event = deps.db.prepare('SELECT deadline_at FROM events WHERE id = ?').get(eventId) as
+    | { deadline_at: string | null }
+    | undefined;
+  return !!event?.deadline_at && new Date(event.deadline_at).getTime() < Date.now();
+}
+
 export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
   app.put<{ Params: { id: string }; Body: { name?: string; color?: string; category?: string; quantity?: number } }>(
     '/items/:id',
@@ -155,10 +165,7 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
     // there means a request sent straight to the API (or a stale page left open past
     // the deadline) can still place a bid — the deadline has to be checked server-side
     // to actually mean anything.
-    const event = deps.db.prepare('SELECT deadline_at FROM events WHERE id = ?').get(item.event_id) as
-      | { deadline_at: string | null }
-      | undefined;
-    if (event?.deadline_at && new Date(event.deadline_at).getTime() < Date.now()) {
+    if (isPastDeadline(deps, item.event_id)) {
       reply.code(409).send({ error: 'bidding has ended' });
       return;
     }
@@ -167,9 +174,16 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
     return { ok: true };
   });
 
-  app.delete<{ Params: { id: string } }>('/items/:id/claim', async (request) => {
+  app.delete<{ Params: { id: string } }>('/items/:id/claim', async (request, reply) => {
     const itemId = Number(request.params.id);
     const userId = request.telegramUser!.telegramId;
+
+    const item = deps.db.prepare('SELECT event_id FROM items WHERE id = ?').get(itemId) as { event_id: number } | undefined;
+    if (item && isPastDeadline(deps, item.event_id)) {
+      reply.code(409).send({ error: 'bidding has ended' });
+      return;
+    }
+
     deps.db.prepare('DELETE FROM claims WHERE item_id = ? AND telegram_id = ?').run(itemId, userId);
     return { ok: true };
   });

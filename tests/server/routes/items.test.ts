@@ -135,6 +135,30 @@ describe('items routes', () => {
     expect(row.count).toBe(0);
   });
 
+  it('unclaiming after the event deadline has passed is rejected (no withdrawing to dodge a win-limit group)', async () => {
+    const pastDeadline = new Date(Date.now() - 60_000).toISOString();
+    const pastEventId = db
+      .prepare("INSERT INTO events (title, status, deadline_at) VALUES ('Просрочен 2', 'open', ?)")
+      .run(pastDeadline).lastInsertRowid as number;
+    const screenshotId = db
+      .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
+      .run(pastEventId, '/tmp/p2.png').lastInsertRowid as number;
+    const lateItemId = db
+      .prepare("INSERT INTO items (event_id, screenshot_id, name, image_path, status) VALUES (?, ?, 'Late', 'items/late2.png', 'pool')")
+      .run(pastEventId, screenshotId).lastInsertRowid as number;
+    // Bid placed while the event was still open (bypassing the claim endpoint, which
+    // would itself reject it now that the deadline is in the past). Alice's users row
+    // is normally created by the auth middleware on her first authenticated request,
+    // which this direct insert skips, so it's seeded by hand here.
+    db.prepare("INSERT INTO users (telegram_id, username) VALUES (2, 'alice')").run();
+    db.prepare('INSERT INTO claims (item_id, telegram_id) VALUES (?, 2)').run(lateItemId);
+
+    const res = await app.inject({ method: 'DELETE', url: `/api/items/${lateItemId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
+    expect(res.statusCode).toBe(409);
+    const row = db.prepare('SELECT COUNT(*) as count FROM claims WHERE item_id = ?').get(lateItemId) as any;
+    expect(row.count).toBe(1);
+  });
+
   it('claiming an already-auctioned item is rejected', async () => {
     db.prepare("UPDATE items SET status = 'auctioned' WHERE id = ?").run(itemAId);
     const res = await app.inject({ method: 'POST', url: `/api/items/${itemAId}/claim`, headers: { 'x-telegram-init-data': bobInitData } });
