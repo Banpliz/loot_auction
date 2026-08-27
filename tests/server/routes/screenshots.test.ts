@@ -126,6 +126,61 @@ describe('POST /api/events/:id/screenshots', () => {
     expect(row.category).toBe('stone');
   });
 
+  it('never reuses an icon file path even when SQLite recycles the screenshot id (delete-then-recreate workflow)', async () => {
+    // The admin's actual workflow: delete the previous test event, then create a new
+    // one, before every test. That empties the `screenshots` table, and its `id` is a
+    // plain INTEGER PRIMARY KEY (no AUTOINCREMENT) — SQLite hands out id=1 again for
+    // the very next insert instead of continuing to count up. Icon files are named
+    // from that id, so a naive scheme would reuse the exact same file path as the
+    // deleted event's screenshot — and since DELETE never removes old files from disk,
+    // a client caching that URL would keep serving the stale image after it's
+    // overwritten. Bug found 2026-08-28.
+    const solidBlue = await sharp({ create: { width: 300, height: 120, channels: 3, background: { r: 74, g: 144, b: 217 } } })
+      .png()
+      .toBuffer();
+
+    async function createEventAndUpload() {
+      const { id: eventId } = await (
+        await fetch(`${baseUrl}/api/events`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-telegram-init-data': adminInitData },
+          body: JSON.stringify({ title: 'Тест', durationMinutes: 25 }),
+        })
+      ).json();
+
+      const form = new FormData();
+      form.append('rows', '1');
+      form.append('template', 'feast');
+      form.append('file', new Blob([solidBlue], { type: 'image/png' }), 'lot.png');
+      const res = await fetch(`${baseUrl}/api/events/${eventId}/screenshots`, {
+        method: 'POST',
+        headers: { 'x-telegram-init-data': adminInitData },
+        body: form,
+      });
+      const itemId = (await res.json()).itemIds[0] as number;
+      return { eventId, itemId };
+    }
+
+    const first = await createEventAndUpload();
+    const firstImagePath = (db.prepare('SELECT image_path FROM items WHERE id = ?').get(first.itemId) as any).image_path;
+    const firstScreenshotId = (
+      db.prepare('SELECT screenshot_id FROM items WHERE id = ?').get(first.itemId) as any
+    ).screenshot_id;
+
+    await fetch(`${baseUrl}/api/events/${first.eventId}`, { method: 'DELETE', headers: { 'x-telegram-init-data': adminInitData } });
+    // Confirms the premise: the table really is empty, so the next insert can recycle id 1.
+    expect(db.prepare('SELECT COUNT(*) as count FROM screenshots').get()).toEqual({ count: 0 });
+
+    const second = await createEventAndUpload();
+    const secondImagePath = (db.prepare('SELECT image_path FROM items WHERE id = ?').get(second.itemId) as any).image_path;
+    const secondScreenshotId = (
+      db.prepare('SELECT screenshot_id FROM items WHERE id = ?').get(second.itemId) as any
+    ).screenshot_id;
+
+    expect(secondScreenshotId).toBe(firstScreenshotId); // the premise: SQLite did recycle the id
+    expect(secondImagePath).not.toBe(firstImagePath); // but the file path must still be unique
+  });
+
   it('never merges lots across templates, even when their icons happen to look identical', async () => {
     // Same event, same-looking icon, but uploaded once as feast and once as
     // invasion — these must stay two separate lots. The admin does upload both

@@ -68,18 +68,31 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
       const slicedRows: SlicedRow[] = [];
 
       for (let f = 0; f < fileBuffers.length; f++) {
-        const originalPath = path.join(originalsDir, `${eventId}-${Date.now()}-${f}.png`);
+        const uploadStamp = Date.now();
+        const originalPath = path.join(originalsDir, `${eventId}-${uploadStamp}-${f}.png`);
         await fs.writeFile(originalPath, fileBuffers[f]);
 
         const screenshotId = insertScreenshot.run(eventId, originalPath, rows, template, userId)
           .lastInsertRowid as number;
 
+        // The prefix folds in uploadStamp, not just screenshotId, on purpose: `id` is a
+        // plain SQLite INTEGER PRIMARY KEY (no AUTOINCREMENT), which reuses low numbers
+        // once the table is emptied out — exactly what happens in the admin's own
+        // workflow of deleting the previous test event before every new one. Deleting an
+        // event drops its DB rows but leaves the old icon files on disk (see the cleanup
+        // ponytail note in DELETE /events/:id), so a reused id would reuse the exact same
+        // file path — and a client that cached that URL from the earlier test (Telegram's
+        // WebView does this) would keep showing the old picture after it's overwritten,
+        // even though the server and DB both already have the right one. Bug found
+        // 2026-08-28: fresh event, brand-new screenshots, but the admin grid showed items
+        // from an unrelated, already-deleted test event.
+        const baseName = `ss${screenshotId}-${uploadStamp}`;
         const cellPaths = await sliceImageToCells(
           originalPath,
           rows!,
           1,
           itemsDir,
-          `ss${screenshotId}`,
+          baseName,
           LAYOUT_TEMPLATES[template].contentTop,
           LAYOUT_TEMPLATES[template].rowHeight
         );
@@ -90,7 +103,7 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
           // stays only as the source for color detection. Templates without a measured
           // iconBox yet fall back to using the whole row for both.
           const imagePath = iconBox
-            ? await cropBox(cellPath, iconBox, path.join(itemsDir, `ss${screenshotId}-${i}-icon.png`))
+            ? await cropBox(cellPath, iconBox, path.join(itemsDir, `${baseName}-${i}-icon.png`))
             : cellPath;
           slicedRows.push({ screenshotId, cellPath, imagePath });
         }
