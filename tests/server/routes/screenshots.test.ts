@@ -64,8 +64,66 @@ describe('POST /api/events/:id/screenshots', () => {
     const row = db.prepare('SELECT image_path, color, name, quantity FROM items WHERE id = ?').get(body.itemIds[0]) as any;
     expect(row.image_path.startsWith('items/')).toBe(true);
     expect(row.color).toBe('red'); // matches the solid-red fixture, no polling needed
-    expect(row.name).toBe(''); // manual-only field, never auto-filled
+    expect(row.name).toBe(''); // no lot-library entry for this icon yet, so nothing to prefill
     expect(row.quantity).toBe(1);
+  });
+
+  it('prefills name/category from the lot library on a later upload of the same-looking icon', async () => {
+    const solidGreen = await sharp({
+      create: { width: 300, height: 120, channels: 3, background: { r: 40, g: 180, b: 60 } },
+    })
+      .png()
+      .toBuffer();
+
+    async function uploadOneRow(eventId: number) {
+      const form = new FormData();
+      form.append('rows', '1');
+      form.append('template', 'feast');
+      form.append('file', new Blob([solidGreen], { type: 'image/png' }), 'lot.png');
+      const res = await fetch(`${baseUrl}/api/events/${eventId}/screenshots`, {
+        method: 'POST',
+        headers: { 'x-telegram-init-data': adminInitData },
+        body: form,
+      });
+      const body = await res.json();
+      return body.itemIds[0] as number;
+    }
+
+    const eventA = (
+      await (
+        await fetch(`${baseUrl}/api/events`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-telegram-init-data': adminInitData },
+          body: JSON.stringify({ title: 'Ивент A', durationMinutes: 25 }),
+        })
+      ).json()
+    ).id;
+    const firstItemId = await uploadOneRow(eventA);
+
+    // Admin tags the lot once — this is the write side of the library.
+    const putRes = await fetch(`${baseUrl}/api/items/${firstItemId}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-telegram-init-data': adminInitData },
+      body: JSON.stringify({ name: 'Камень душ', category: 'stone' }),
+    });
+    expect(putRes.status).toBe(200);
+
+    // A different event, same-looking icon — should come back pre-tagged without the
+    // admin touching it, instead of landing as a blank 'item' again.
+    const eventB = (
+      await (
+        await fetch(`${baseUrl}/api/events`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-telegram-init-data': adminInitData },
+          body: JSON.stringify({ title: 'Ивент B', durationMinutes: 25 }),
+        })
+      ).json()
+    ).id;
+    const secondItemId = await uploadOneRow(eventB);
+
+    const row = db.prepare('SELECT name, category FROM items WHERE id = ?').get(secondItemId) as any;
+    expect(row.name).toBe('Камень душ');
+    expect(row.category).toBe('stone');
   });
 
   it('merges duplicate rows within one screenshot into a single lot with a quantity', async () => {

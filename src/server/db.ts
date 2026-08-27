@@ -94,6 +94,17 @@ function migrate(db: Db) {
       telegram_id INTEGER NOT NULL REFERENCES users(telegram_id),
       UNIQUE(item_id, telegram_id)
     );
+
+    -- Cross-event memory of "this icon is called X and is a Y" (see lot-library.ts),
+    -- so the admin doesn't have to re-tag the same recurring item on every upload.
+    -- Not scoped to an event — a real item's icon looks the same everywhere it drops.
+    CREATE TABLE IF NOT EXISTS lot_library (
+      id INTEGER PRIMARY KEY,
+      icon_signature BLOB NOT NULL,
+      name TEXT NOT NULL DEFAULT '',
+      category TEXT NOT NULL DEFAULT 'item',
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 
   // Additive column (feast's per-category win limit, see events.ts) — a plain ALTER

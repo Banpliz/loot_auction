@@ -7,6 +7,7 @@ import { sliceImageToCells, cropBox } from '../grid-slice';
 import { isTemplate, LAYOUT_TEMPLATES } from '../layout-templates';
 import { detectColor } from '../color-detect';
 import { computeIconSignature, groupBySignature, isSameIcon, isGenericChestIcon, type IconSignature } from '../dedup';
+import { findInLibrary } from '../lot-library';
 
 interface SlicedRow {
   screenshotId: number;
@@ -60,7 +61,7 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
         'INSERT INTO screenshots (event_id, original_path, rows, template, uploaded_by) VALUES (?, ?, ?, ?, ?)'
       );
       const insertItem = deps.db.prepare(
-        "INSERT INTO items (event_id, screenshot_id, image_path, color, quantity, status) VALUES (?, ?, ?, ?, ?, 'pool')"
+        "INSERT INTO items (event_id, screenshot_id, image_path, color, category, name, quantity, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pool')"
       );
 
       const { iconBox } = LAYOUT_TEMPLATES[template];
@@ -153,8 +154,14 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
           request.log.warn({ err }, 'color detection failed, defaulting to blue');
         }
 
+        // A generic chest icon can't be trusted to identify what's actually inside it
+        // (see isGenericChestIcon above), so it's excluded from library lookup the same
+        // way it's excluded from cross-upload dedup — otherwise every chest lot would
+        // get stamped with whatever name/category the first one was ever tagged.
+        const known = isGenericChestIcon(signature) ? undefined : findInLibrary(deps.db, signature);
+
         const itemId = insertItem
-          .run(eventId, representative.screenshotId, relPath, color, group.length)
+          .run(eventId, representative.screenshotId, relPath, color, known?.category ?? 'item', known?.name ?? '', group.length)
           .lastInsertRowid as number;
         itemIds.push(itemId);
         existingSignatures.push({ item: { id: itemId, imagePath: relPath, quantity: group.length }, signature });

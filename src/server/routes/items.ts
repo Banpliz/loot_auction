@@ -1,6 +1,9 @@
 import type { FastifyInstance } from 'fastify';
+import path from 'node:path';
 import type { AppDeps } from '../types';
 import { requireAdmin } from '../auth';
+import { computeIconSignature, isGenericChestIcon } from '../dedup';
+import { rememberLot } from '../lot-library';
 
 const VALID_COLORS = new Set(['blue', 'purple', 'red']);
 const VALID_CATEGORIES = new Set(['item', 'stone']);
@@ -48,8 +51,31 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
         values.push(quantity);
       }
 
-      values.push(Number(request.params.id));
+      const itemId = Number(request.params.id);
+      values.push(itemId);
       deps.db.prepare(`UPDATE items SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+
+      // Remember this icon's name/category for next time (the whole point of the
+      // library — see lot-library.ts) whenever the admin actually set one of them.
+      // A generic chest icon is excluded, same reasoning as screenshots.ts: it looks
+      // identical across genuinely different chests, so "remembering" it would just
+      // stamp the wrong name/category onto some future unrelated chest lot.
+      if (name !== undefined || category !== undefined) {
+        const row = deps.db.prepare('SELECT name, category, image_path as imagePath FROM items WHERE id = ?').get(itemId) as
+          | { name: string; category: string; imagePath: string }
+          | undefined;
+        if (row) {
+          try {
+            const signature = await computeIconSignature(path.join(deps.dataDir, 'uploads', row.imagePath));
+            if (!isGenericChestIcon(signature)) {
+              rememberLot(deps.db, signature, row.name, row.category);
+            }
+          } catch (err) {
+            request.log.warn({ err }, 'lot-library: failed to read icon, skipping remember');
+          }
+        }
+      }
+
       return { ok: true };
     }
   );

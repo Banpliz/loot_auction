@@ -5,13 +5,13 @@ import path from 'node:path';
 import { openDb } from '../../src/server/db';
 
 describe('openDb', () => {
-  it('creates six tables (no settings/catalog tables)', () => {
+  it('creates seven tables (no settings/catalog tables)', () => {
     const db = openDb(':memory:');
     const tables = db
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
       .all()
       .map((row: any) => row.name);
-    expect(tables).toEqual(['claims', 'events', 'item_winners', 'items', 'screenshots', 'users']);
+    expect(tables).toEqual(['claims', 'events', 'item_winners', 'items', 'lot_library', 'screenshots', 'users']);
   });
 
   it('defaults items.color to blue, items.price to empty string, items.quantity to 1', () => {
