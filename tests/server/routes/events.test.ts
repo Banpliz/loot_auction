@@ -204,9 +204,58 @@ describe('events routes', () => {
 
     const gearWins = rows.filter((r) => r.category === 'item' && wonItemIds.has(r.id)).length;
     const stoneWins = rows.filter((r) => r.category === 'stone' && wonItemIds.has(r.id)).length;
-    expect(gearWins).toBe(1);
-    expect(stoneWins).toBe(3);
-    expect(rows.filter((r) => r.status === 'pool')).toHaveLength(2);
+    // Categories are mutually exclusive (2026-08-28): whichever category the shuffle
+    // resolves first locks Bob into it, so exactly one of these is zero — never both
+    // nonzero, and never both zero (he's eligible for whichever comes first).
+    expect(gearWins === 0 || stoneWins === 0).toBe(true);
+    expect(gearWins > 0 || stoneWins > 0).toBe(true);
+    expect(gearWins).toBeLessThanOrEqual(1);
+    expect(stoneWins).toBeLessThanOrEqual(3);
+  });
+
+  it('feast categories are mutually exclusive: winning a stone rules out winning gear too, and vice versa', async () => {
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/events',
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { title: 'Пир исключение', durationMinutes: 25 },
+    });
+    const eventId = createRes.json().id;
+
+    const screenshot = db
+      .prepare("INSERT INTO screenshots (event_id, original_path, rows, template, uploaded_by) VALUES (?, ?, 1, 'feast', 1)")
+      .run(eventId, '/tmp/feast2.png');
+
+    const insertItem = db.prepare(
+      "INSERT INTO items (event_id, screenshot_id, name, image_path, status, color, category) VALUES (?, ?, ?, 'items/x.png', 'pool', 'red', ?)"
+    );
+    const gearId = insertItem.run(eventId, screenshot.lastInsertRowid, 'Наручи', 'item').lastInsertRowid as number;
+    const stoneId = insertItem.run(eventId, screenshot.lastInsertRowid, 'Камень', 'stone').lastInsertRowid as number;
+
+    // Bob is the ONLY bidder on both — with no exclusivity rule he'd win both (he's
+    // always eligible, since no one else could take either slot from him). With it,
+    // winning whichever comes first in the shuffle should lock him out of the other,
+    // leaving it unresolved in the pool (no other claimant left to give it to).
+    db.prepare('INSERT INTO claims (item_id, telegram_id) VALUES (?, 2)').run(gearId);
+    db.prepare('INSERT INTO claims (item_id, telegram_id) VALUES (?, 2)').run(stoneId);
+
+    const resolveRes = await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/resolve`,
+      headers: { 'x-telegram-init-data': adminInitData },
+    });
+    expect(resolveRes.statusCode).toBe(200);
+
+    const rows = db
+      .prepare('SELECT id, status FROM items WHERE id IN (?, ?)')
+      .all(gearId, stoneId) as { id: number; status: string }[];
+    const auctioned = rows.filter((r) => r.status === 'auctioned');
+    const stillPool = rows.filter((r) => r.status === 'pool');
+    expect(auctioned).toHaveLength(1); // exactly one of the two got won
+    expect(stillPool).toHaveLength(1); // the other has no one left eligible to give it to
+
+    const winners = db.prepare('SELECT item_id FROM item_winners WHERE telegram_id = 2').all() as { item_id: number }[];
+    expect(winners).toHaveLength(1); // Bob won exactly one, never both
   });
 
   it('draws up to quantity distinct winners for a single lot from everyone who bid on it', async () => {

@@ -16,8 +16,11 @@ type CategoryGroup = 'item' | 'stone';
 // Fixed by design, not admin-configurable. Invasion caps by rarity color (purple+red
 // combined 1 win/person/event, blue 2). Feast's alliance rule cuts across colors instead
 // — gear (armor/weapons/etc.) capped at 1, tempering stones at 3 — so it's grouped by
-// admin-set item.category rather than color. The two schemes are independent counters:
-// a feast item's color never affects its cap, only its category does.
+// admin-set item.category rather than color. The two feast groups are also mutually
+// exclusive (2026-08-28): winning a stone rules a person out of ever winning gear in the
+// same event, and vice versa — otherwise one person could walk away with both a gear
+// piece and 3 stones while someone else gets nothing, which the alliance considers unfair
+// ("one guy gets a lemon crate, another gets squat").
 const COLOR_WIN_LIMITS: Record<ColorGroup, number> = { purpleRed: 1, blue: 2 };
 const CATEGORY_WIN_LIMITS: Record<CategoryGroup, number> = { item: 1, stone: 3 };
 
@@ -26,11 +29,13 @@ function colorGroup(color: string): ColorGroup {
 }
 
 // Returns a per-person counter key (namespaced so a color group and a category group
-// can never collide) plus the cap that applies to it.
-function winLimitGroup(template: string, color: string, category: string): { key: string; limit: number } {
+// can never collide), the cap that applies to it, and — for feast only — the other
+// category's key: any existing win there makes a person ineligible for this one too.
+function winLimitGroup(template: string, color: string, category: string): { key: string; limit: number; exclusiveWith?: string } {
   if (template === 'feast') {
     const group: CategoryGroup = category === 'stone' ? 'stone' : 'item';
-    return { key: `cat:${group}`, limit: CATEGORY_WIN_LIMITS[group] };
+    const other: CategoryGroup = group === 'stone' ? 'item' : 'stone';
+    return { key: `cat:${group}`, limit: CATEGORY_WIN_LIMITS[group], exclusiveWith: `cat:${other}` };
   }
   const group = colorGroup(color);
   return { key: `color:${group}`, limit: COLOR_WIN_LIMITS[group] };
@@ -205,11 +210,16 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
           let remaining = deps.db.prepare('SELECT telegram_id FROM claims WHERE item_id = ?').all(item.id) as {
             telegram_id: number;
           }[];
-          const { key, limit } = winLimitGroup(item.template, item.color, item.category);
+          const { key, limit, exclusiveWith } = winLimitGroup(item.template, item.color, item.category);
 
           let wins = 0;
           for (let i = 0; i < item.quantity; i++) {
-            const eligible = remaining.filter((c) => (winCounts.get(c.telegram_id)?.get(key) ?? 0) < limit);
+            const eligible = remaining.filter((c) => {
+              const counts = winCounts.get(c.telegram_id);
+              if ((counts?.get(key) ?? 0) >= limit) return false;
+              if (exclusiveWith && (counts?.get(exclusiveWith) ?? 0) > 0) return false;
+              return true;
+            });
             const winner = pickRandom(eligible);
             if (!winner) break; // no claimant left who hasn't already hit their group's cap
 
