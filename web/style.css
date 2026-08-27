@@ -354,11 +354,20 @@ button {
 
 .admin-item-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.35rem;
 }
 
 .admin-item-actions button {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Merge action (Слить/Сюда/Отмена) always gets its own full-width row — three
+   buttons side by side on a 140px card overflowed the card and spilled into
+   the grid gutter instead of wrapping. */
+.admin-item-actions button[data-action^='merge'] {
+  flex-basis: 100%;
 }
 
 .admin-item-merge-source {
