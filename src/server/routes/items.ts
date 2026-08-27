@@ -117,9 +117,23 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
     const itemId = Number(request.params.id);
     const userId = request.telegramUser!.telegramId;
 
-    const item = deps.db.prepare('SELECT status FROM items WHERE id = ?').get(itemId) as { status: string } | undefined;
+    const item = deps.db.prepare('SELECT status, event_id FROM items WHERE id = ?').get(itemId) as
+      | { status: string; event_id: number }
+      | undefined;
     if (!item || item.status !== 'pool') {
       reply.code(409).send({ error: 'item is not claimable' });
+      return;
+    }
+
+    // The UI hides the bid button once the countdown runs out, but only enforcing it
+    // there means a request sent straight to the API (or a stale page left open past
+    // the deadline) can still place a bid — the deadline has to be checked server-side
+    // to actually mean anything.
+    const event = deps.db.prepare('SELECT deadline_at FROM events WHERE id = ?').get(item.event_id) as
+      | { deadline_at: string | null }
+      | undefined;
+    if (event?.deadline_at && new Date(event.deadline_at).getTime() < Date.now()) {
+      reply.code(409).send({ error: 'bidding has ended' });
       return;
     }
 
