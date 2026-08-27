@@ -38,6 +38,10 @@ function winLimitGroup(template: string, color: string, category: string): { key
 
 const ITEM_COLUMNS = `i.id, i.name, i.color, i.category, i.quantity, i.image_path as imagePath, i.status`;
 
+// Rarest-looking first: red, then purple, then blue — matches the in-game rarity
+// order, not insertion order.
+const COLOR_ORDER_SQL = `CASE i.color WHEN 'red' THEN 0 WHEN 'purple' THEN 1 WHEN 'blue' THEN 2 ELSE 3 END`;
+
 interface Winner {
   telegramId: number;
   nickname: string | null;
@@ -132,7 +136,7 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
                 EXISTS(SELECT 1 FROM claims c WHERE c.item_id = i.id AND c.telegram_id = ?) as claimedByMe
          FROM items i
          WHERE i.event_id = ? AND i.status != 'removed'
-         ORDER BY i.id`
+         ORDER BY ${COLOR_ORDER_SQL}, i.id`
       )
       .all(userId, event.id) as { id: number }[];
 
@@ -154,7 +158,7 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
         `SELECT ${ITEM_COLUMNS}
          FROM items i
          WHERE i.event_id = ? AND i.status != 'removed'
-         ORDER BY i.id`
+         ORDER BY ${COLOR_ORDER_SQL}, i.id`
       )
       .all(eventId) as { id: number }[];
 

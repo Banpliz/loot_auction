@@ -368,6 +368,40 @@ describe('events routes', () => {
     expect(res.json().events[0]).toMatchObject({ title: 'Ивент А', itemCount: 0 });
   });
 
+  it('GET /events/:id and /events/current list items red first, then purple, then blue', async () => {
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/events',
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { title: 'Ивент по цветам', durationMinutes: 25 },
+    });
+    const eventId = createRes.json().id;
+
+    const screenshot = db
+      .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
+      .run(eventId, '/tmp/colors.png');
+
+    const insertItem = db.prepare(
+      "INSERT INTO items (event_id, screenshot_id, name, image_path, status, color) VALUES (?, ?, ?, 'items/x.png', 'pool', ?)"
+    );
+    // Inserted out of rarity order on purpose, to prove the response re-sorts them.
+    for (const [name, color] of [
+      ['Blue A', 'blue'],
+      ['Red A', 'red'],
+      ['Purple A', 'purple'],
+      ['Blue B', 'blue'],
+      ['Red B', 'red'],
+    ] as const) {
+      insertItem.run(eventId, screenshot.lastInsertRowid, name, color);
+    }
+
+    const adminRes = await app.inject({ method: 'GET', url: `/api/events/${eventId}`, headers: { 'x-telegram-init-data': adminInitData } });
+    expect(adminRes.json().items.map((i: any) => i.color)).toEqual(['red', 'red', 'purple', 'blue', 'blue']);
+
+    const userRes = await app.inject({ method: 'GET', url: '/api/events/current', headers: { 'x-telegram-init-data': memberInitData } });
+    expect(userRes.json().items.map((i: any) => i.color)).toEqual(['red', 'red', 'purple', 'blue', 'blue']);
+  });
+
   it('GET /events/:id returns the event with its items, admin-only', async () => {
     const createRes = await app.inject({
       method: 'POST',
