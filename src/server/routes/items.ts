@@ -50,6 +50,60 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
     return { ok: true };
   });
 
+  // Manual escape hatch for icon-dedup misses across separate screenshot uploads
+  // (see dedup.ts) — admin folds a duplicate lot into another by hand instead of
+  // relying on the pixel-signature threshold, which can't reliably tell "same
+  // item, different photo" from "different item" at the margin observed in
+  // practice. Source's bidders carry over (deduped, a claimant on both keeps
+  // one bid) and it's soft-removed rather than merging its own quantity twice.
+  app.post<{ Params: { id: string }; Body: { intoId?: number } }>(
+    '/items/:id/merge',
+    { preHandler: requireAdmin(deps) },
+    async (request, reply) => {
+      const sourceId = Number(request.params.id);
+      const targetId = Number(request.body?.intoId);
+      if (!Number.isInteger(targetId)) {
+        reply.code(400).send({ error: 'intoId is required' });
+        return;
+      }
+      if (sourceId === targetId) {
+        reply.code(400).send({ error: 'cannot merge an item into itself' });
+        return;
+      }
+
+      const source = deps.db.prepare('SELECT event_id, status, quantity FROM items WHERE id = ?').get(sourceId) as
+        | { event_id: number; status: string; quantity: number }
+        | undefined;
+      const target = deps.db.prepare('SELECT event_id, status FROM items WHERE id = ?').get(targetId) as
+        | { event_id: number; status: string }
+        | undefined;
+      if (!source || !target) {
+        reply.code(404).send({ error: 'item not found' });
+        return;
+      }
+      if (source.event_id !== target.event_id) {
+        reply.code(400).send({ error: 'items belong to different events' });
+        return;
+      }
+      if (source.status !== 'pool' || target.status !== 'pool') {
+        reply.code(409).send({ error: 'both lots must still be in the pool' });
+        return;
+      }
+
+      const mergeItems = deps.db.transaction(() => {
+        deps.db
+          .prepare('INSERT OR IGNORE INTO claims (item_id, telegram_id) SELECT ?, telegram_id FROM claims WHERE item_id = ?')
+          .run(targetId, sourceId);
+        deps.db.prepare('DELETE FROM claims WHERE item_id = ?').run(sourceId);
+        deps.db.prepare('UPDATE items SET quantity = quantity + ? WHERE id = ?').run(source.quantity, targetId);
+        deps.db.prepare("UPDATE items SET status = 'removed' WHERE id = ?").run(sourceId);
+      });
+      mergeItems();
+
+      return { ok: true };
+    }
+  );
+
   app.post<{ Params: { id: string } }>('/items/:id/claim', async (request, reply) => {
     const itemId = Number(request.params.id);
     const userId = request.telegramUser!.telegramId;
