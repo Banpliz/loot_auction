@@ -346,4 +346,33 @@ describe('events routes', () => {
     expect(db.prepare('SELECT * FROM screenshots WHERE event_id = ?').get(eventId)).toBeUndefined();
     expect(db.prepare('SELECT * FROM claims WHERE item_id = ?').get(itemId)).toBeUndefined();
   });
+
+  it('DELETE /events/:id succeeds for an already-resolved event (item_winners rows exist)', async () => {
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/events',
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { title: 'Резолвнутый', durationMinutes: 25 },
+    });
+    const eventId = createRes.json().id;
+    const screenshot = db
+      .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
+      .run(eventId, '/tmp/resolved.png').lastInsertRowid as number;
+    const itemId = db
+      .prepare("INSERT INTO items (event_id, screenshot_id, name, image_path, status) VALUES (?, ?, 'X', 'items/x.png', 'pool')")
+      .run(eventId, screenshot).lastInsertRowid as number;
+    db.prepare('INSERT INTO claims (item_id, telegram_id) VALUES (?, ?)').run(itemId, 2);
+
+    const resolveRes = await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/resolve`,
+      headers: { 'x-telegram-init-data': adminInitData },
+    });
+    expect(resolveRes.statusCode).toBe(200);
+    expect(db.prepare('SELECT * FROM item_winners WHERE item_id = ?').get(itemId)).toBeDefined();
+
+    const del = await app.inject({ method: 'DELETE', url: `/api/events/${eventId}`, headers: { 'x-telegram-init-data': adminInitData } });
+    expect(del.statusCode).toBe(200);
+    expect(db.prepare('SELECT * FROM item_winners WHERE item_id = ?').get(itemId)).toBeUndefined();
+  });
 });

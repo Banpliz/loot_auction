@@ -92,6 +92,9 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
       deps.db
         .prepare('DELETE FROM claims WHERE item_id IN (SELECT id FROM items WHERE event_id = ?)')
         .run(eventId);
+      deps.db
+        .prepare('DELETE FROM item_winners WHERE item_id IN (SELECT id FROM items WHERE event_id = ?)')
+        .run(eventId);
       deps.db.prepare('DELETE FROM items WHERE event_id = ?').run(eventId);
       deps.db.prepare('DELETE FROM screenshots WHERE event_id = ?').run(eventId);
       deps.db.prepare('DELETE FROM events WHERE id = ?').run(eventId);

@@ -179,6 +179,87 @@ describe('POST /api/events/:id/screenshots', () => {
     expect(row.quantity).toBe(2);
   });
 
+  it('merges a duplicate row uploaded in a separate later request into the existing pool lot', async () => {
+    const createEventRes = await fetch(`${baseUrl}/api/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-telegram-init-data': adminInitData },
+      body: JSON.stringify({ title: 'Ивент cross-upload dup', durationMinutes: 25 }),
+    });
+    const { id: eventId } = await createEventRes.json();
+
+    const imageBuffer = await sharp({ create: { width: 300, height: 60, channels: 3, background: { r: 0, g: 0, b: 0 } } })
+      .png()
+      .toBuffer();
+
+    const uploadOnce = () => {
+      const form = new FormData();
+      form.append('rows', '1');
+      form.append('template', 'feast');
+      form.append('file', new Blob([imageBuffer], { type: 'image/png' }), 'reward.png');
+      return fetch(`${baseUrl}/api/events/${eventId}/screenshots`, {
+        method: 'POST',
+        headers: { 'x-telegram-init-data': adminInitData },
+        body: form,
+      });
+    };
+
+    const firstRes = await uploadOnce();
+    expect(firstRes.status).toBe(200);
+    const firstBody = await firstRes.json();
+    expect(firstBody.itemIds).toHaveLength(1);
+
+    const secondRes = await uploadOnce();
+    expect(secondRes.status).toBe(200);
+    const secondBody = await secondRes.json();
+    expect(secondBody.itemIds).toEqual(firstBody.itemIds); // same lot, not a new one
+
+    const itemCount = db.prepare("SELECT COUNT(*) as c FROM items WHERE event_id = ? AND status = 'pool'").get(eventId) as {
+      c: number;
+    };
+    expect(itemCount.c).toBe(1);
+
+    const row = db.prepare('SELECT quantity FROM items WHERE id = ?').get(firstBody.itemIds[0]) as any;
+    expect(row.quantity).toBe(2);
+  });
+
+  it('does not merge into a lot that has already been auctioned', async () => {
+    const createEventRes = await fetch(`${baseUrl}/api/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-telegram-init-data': adminInitData },
+      body: JSON.stringify({ title: 'Ивент no-merge-after-resolve', durationMinutes: 25 }),
+    });
+    const { id: eventId } = await createEventRes.json();
+
+    const imageBuffer = await sharp({ create: { width: 300, height: 60, channels: 3, background: { r: 0, g: 0, b: 0 } } })
+      .png()
+      .toBuffer();
+
+    const uploadOnce = () => {
+      const form = new FormData();
+      form.append('rows', '1');
+      form.append('template', 'feast');
+      form.append('file', new Blob([imageBuffer], { type: 'image/png' }), 'reward.png');
+      return fetch(`${baseUrl}/api/events/${eventId}/screenshots`, {
+        method: 'POST',
+        headers: { 'x-telegram-init-data': adminInitData },
+        body: form,
+      });
+    };
+
+    const firstRes = await uploadOnce();
+    const firstBody = await firstRes.json();
+    db.prepare("UPDATE items SET status = 'auctioned' WHERE id = ?").run(firstBody.itemIds[0]);
+
+    const secondRes = await uploadOnce();
+    const secondBody = await secondRes.json();
+    expect(secondBody.itemIds).not.toEqual(firstBody.itemIds); // new lot, old one is already resolved
+
+    const poolCount = db.prepare("SELECT COUNT(*) as c FROM items WHERE event_id = ? AND status = 'pool'").get(eventId) as {
+      c: number;
+    };
+    expect(poolCount.c).toBe(1);
+  });
+
   it('crops the item image down to just the icon badge for templates with a measured iconBox', async () => {
     const createEventRes = await fetch(`${baseUrl}/api/events`, {
       method: 'POST',

@@ -20,6 +20,10 @@ function signatureDistance(a: IconSignature, b: IconSignature): number {
   return sum / a.length;
 }
 
+export function isSameIcon(a: IconSignature, b: IconSignature): boolean {
+  return signatureDistance(a, b) < SAME_ITEM_THRESHOLD;
+}
+
 // Groups entries whose icon looks the same, in encounter order — each group's
 // "leader" is whichever entry started it, so later near-duplicates just join
 // rather than re-comparing every pair (fine at upload-batch scale, a few dozen

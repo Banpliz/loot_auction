@@ -299,6 +299,28 @@ button {
   flex-shrink: 0;
 }
 
+.winners {
+  flex-shrink: 0;
+}
+
+.winners summary {
+  cursor: pointer;
+  display: inline-block;
+  color: var(--success);
+  background: var(--success-tint);
+  font-weight: 700;
+  font-size: 0.82rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 999px;
+}
+
+.winners p {
+  margin: 0.35rem 0 0;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  text-align: right;
+}
+
 .item, .admin-item {
   background: var(--surface);
   border: 1px solid var(--border);

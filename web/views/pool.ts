@@ -64,7 +64,12 @@ export async function renderPool(root: HTMLElement) {
         </div>
         ${
           item.status === 'auctioned'
-            ? `<p class="badge">Разыграно: ${item.winners.length > 0 ? item.winners.map((w) => escapeHtml(w.nickname ?? '—')).join(', ') : '—'}</p>`
+            ? item.winners.length > 0
+              ? `<details class="winners">
+                   <summary>Победители (${item.winners.length})</summary>
+                   <p>${item.winners.map((w) => escapeHtml(w.nickname ?? '—')).join(', ')}</p>
+                 </details>`
+              : `<p class="badge">Разыграно: —</p>`
             : `<button data-action="${item.claimedByMe ? 'unclaim' : 'claim'}" class="btn-sm ${item.claimedByMe ? 'btn-secondary' : ''}">${
                 item.claimedByMe ? 'Отменить' : 'Ставка'
               }</button>`
