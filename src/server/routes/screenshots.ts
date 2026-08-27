@@ -6,7 +6,7 @@ import { requireAdmin } from '../auth';
 import { sliceImageToCells, cropBox } from '../grid-slice';
 import { isTemplate, LAYOUT_TEMPLATES } from '../layout-templates';
 import { detectColor } from '../color-detect';
-import { computeIconSignature, groupBySignature, isSameIcon, type IconSignature } from '../dedup';
+import { computeIconSignature, groupBySignature, isSameIcon, isGenericChestIcon, type IconSignature } from '../dedup';
 
 interface SlicedRow {
   screenshotId: number;
@@ -127,7 +127,14 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
         const representative = group[0];
         const signature = signatureByPath.get(representative.imagePath)!;
 
-        const existingMatch = existingSignatures.find((es) => isSameIcon(es.signature, signature));
+        // The generic chest icon is excluded from cross-upload matching (see
+        // isGenericChestIcon) — it looks identical across genuinely different
+        // chest lots, so treating repeats across separate uploads as "the same
+        // chest" would silently swallow real lots. Within this one upload,
+        // groupBySignature above still merged any true repeats normally.
+        const existingMatch = isGenericChestIcon(signature)
+          ? undefined
+          : existingSignatures.find((es) => isSameIcon(es.signature, signature));
         if (existingMatch) {
           bumpQuantity.run(group.length, existingMatch.item.id);
           existingMatch.item.quantity += group.length;

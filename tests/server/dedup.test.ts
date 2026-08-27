@@ -3,7 +3,7 @@ import sharp from 'sharp';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { computeIconSignature, groupBySignature } from '../../src/server/dedup';
+import { computeIconSignature, groupBySignature, isGenericChestIcon, CHEST_REFERENCE_SIGNATURE } from '../../src/server/dedup';
 
 describe('dedup', () => {
   let tmpDir: string;
@@ -60,5 +60,22 @@ describe('dedup', () => {
       [1, 3, 4],
       [2],
     ]);
+  });
+
+  it('recognizes the generic reward-chest icon by its reference signature', async () => {
+    const chestPath = path.join(tmpDir, 'chest.png');
+    // Rebuild a PNG straight from the reference's own raw pixels so the round
+    // trip through computeIconSignature (resize 16x16 fill) is a no-op and
+    // reproduces the reference exactly.
+    await sharp(CHEST_REFERENCE_SIGNATURE, { raw: { width: 16, height: 16, channels: 3 } }).png().toFile(chestPath);
+    const signature = await computeIconSignature(chestPath);
+    expect(isGenericChestIcon(signature)).toBe(true);
+  });
+
+  it('does not flag unrelated icons as the generic chest', async () => {
+    const red = await computeIconSignature(redPath);
+    const blue = await computeIconSignature(bluePath);
+    expect(isGenericChestIcon(red)).toBe(false);
+    expect(isGenericChestIcon(blue)).toBe(false);
   });
 });
