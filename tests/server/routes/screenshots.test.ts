@@ -7,10 +7,11 @@ import { openDb, type Db } from '../../../src/server/db';
 import { buildServer } from '../../../src/server/server';
 import { signUserInitData } from '../../test-helpers';
 import type { FastifyInstance } from 'fastify';
-import { extractInvasionLoot } from '../../../src/server/vision';
+import { extractInvasionLoot, readQuantities } from '../../../src/server/vision';
 
 vi.mock('../../../src/server/vision', () => ({
   extractInvasionLoot: vi.fn(),
+  readQuantities: vi.fn(),
 }));
 
 describe('POST /api/events/:id/screenshots', () => {
@@ -597,6 +598,53 @@ describe('POST /api/events/:id/screenshots', () => {
 
     const row = db.prepare('SELECT quantity FROM items WHERE id = ?').get(body.itemIds[0]) as any;
     expect(row.quantity).toBe(5); // 2 + 3, not a count (2) or an overwrite
+  });
+
+  it('uses the code-side CV pipeline when it confidently detects a panel and frames, skipping the Vision fallback', async () => {
+    const createEventRes = await fetch(`${baseUrl}/api/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-telegram-init-data': adminInitData },
+      body: JSON.stringify({ title: 'Ивент CV' }),
+    });
+    const { id: eventId } = await createEventRes.json();
+
+    // Dark background, a large cream panel spanning most of the height, one blue rectangle
+    // inside it — exactly what detectInvasionFrames (Task 1) is built to recognize for real,
+    // no mocking of the detection itself.
+    const panel = await sharp({ create: { width: 300, height: 240, channels: 3, background: { r: 237, g: 224, b: 196 } } })
+      .png()
+      .toBuffer();
+    const frame = await sharp({ create: { width: 60, height: 60, channels: 3, background: { r: 74, g: 144, b: 217 } } })
+      .png()
+      .toBuffer();
+    const imageBuffer = await sharp({ create: { width: 300, height: 300, channels: 3, background: { r: 10, g: 10, b: 15 } } })
+      .composite([
+        { input: panel, left: 0, top: 30 },
+        { input: frame, left: 150, top: 100 },
+      ])
+      .png()
+      .toBuffer();
+
+    vi.mocked(readQuantities).mockResolvedValueOnce([4]);
+
+    const form = new FormData();
+    form.append('template', 'invasion');
+    form.append('file', new Blob([imageBuffer], { type: 'image/png' }), 'reward.png');
+
+    const res = await fetch(`${baseUrl}/api/events/${eventId}/screenshots`, {
+      method: 'POST',
+      headers: { 'x-telegram-init-data': adminInitData },
+      body: form,
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.itemIds).toHaveLength(1);
+
+    const row = db.prepare('SELECT color, quantity FROM items WHERE id = ?').get(body.itemIds[0]) as any;
+    expect(row.color).toBe('blue');
+    expect(row.quantity).toBe(4);
+    expect(extractInvasionLoot).not.toHaveBeenCalled();
+    expect(readQuantities).toHaveBeenCalledTimes(1);
   });
 
   it('rejects an invasion upload with 400 when ANTHROPIC_API_KEY is not configured', async () => {

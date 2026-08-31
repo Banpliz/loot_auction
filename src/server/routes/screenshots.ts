@@ -9,7 +9,8 @@ import { detectColor, type RarityColor } from '../color-detect';
 import { computeIconSignature, groupBySignature, isSameIcon, isGenericChestIcon, type IconSignature } from '../dedup';
 import { findInLibrary } from '../lot-library';
 import { isEventDraft } from './items';
-import { extractInvasionLoot } from '../vision';
+import { extractInvasionLoot, readQuantities, type VisionLotItem } from '../vision';
+import { detectInvasionFrames, cropBadge } from '../invasion-cv';
 
 interface LotCandidate {
   screenshotId: number;
@@ -137,11 +138,22 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
             candidates.push({ screenshotId, imagePath, color, quantity: 1 });
           }
         } else {
-          let visionItems;
+          let visionItems: VisionLotItem[];
           try {
-            visionItems = await extractInvasionLoot(fileBuffers[f], deps.anthropicApiKey!, deps.anthropicBaseUrl);
+            // Code-side detection first (deterministic panel/frame geometry, no model call) —
+            // only the digit-reading call below touches Vision. null means the pipeline isn't
+            // confident it found a panel or any frames at all, so the whole screenshot falls
+            // back to the original full-image Vision path unchanged.
+            const frames = await detectInvasionFrames(fileBuffers[f]);
+            if (frames) {
+              const badgeCrops = await Promise.all(frames.map((frame) => cropBadge(fileBuffers[f], frame)));
+              const quantities = await readQuantities(badgeCrops, deps.anthropicApiKey!, deps.anthropicBaseUrl);
+              visionItems = frames.map((frame, i) => ({ ...frame, quantity: quantities[i] }));
+            } else {
+              visionItems = await extractInvasionLoot(fileBuffers[f], deps.anthropicApiKey!, deps.anthropicBaseUrl);
+            }
           } catch (err) {
-            request.log.error({ err }, 'invasion vision extraction failed');
+            request.log.error({ err }, 'invasion recognition failed');
             reply.code(502).send({ error: `Не удалось распознать скриншот: ${(err as Error).message}` });
             return;
           }
