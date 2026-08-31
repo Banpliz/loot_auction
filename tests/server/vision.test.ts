@@ -38,17 +38,17 @@ describe('extractInvasionLoot', () => {
 
     const result = await extractInvasionLoot(fakeImage, 'test-key');
     // Expanded by the asymmetric margin applied post-validation (see SIDE_MARGIN_RATIO /
-    // TOP_MARGIN_RATIO / Y_DRIFT_MARGIN_RATIO / MARGIN_RATIO in vision.ts, round 13):
-    // marginX = 0.1*0.03 = 0.003, marginTop = 0.1*0.3 + 0.2*0.2 = 0.07 (adds a term for the
-    // item's own y = 0.2, on top of round 12's per-icon-height term), marginBottom =
+    // TOP_MARGIN_RATIO / Y_DRIFT_MARGIN_RATIO / MARGIN_RATIO in vision.ts, round 14):
+    // marginX = 0.1*0.03 = 0.003, marginTop = 0.1*0.3 + 0.2*0.04 = 0.038 (round 13's y-drift
+    // term, cut to a fifth in round 14 after it badly overshot live), marginBottom =
     // 0.1*0.08 = 0.008. x shrinks by marginX, y shrinks by marginTop, w grows by 2*marginX,
     // h grows by marginTop+marginBottom. toBeCloseTo for the floating-point fields — plain
     // toEqual is exact-equality and flaky against binary floating-point rounding.
     expect(result).toHaveLength(1);
     expect(result[0].x).toBeCloseTo(0.097);
-    expect(result[0].y).toBeCloseTo(0.13);
+    expect(result[0].y).toBeCloseTo(0.162);
     expect(result[0].w).toBeCloseTo(0.106);
-    expect(result[0].h).toBeCloseTo(0.178);
+    expect(result[0].h).toBeCloseTo(0.146);
     expect(result[0].rarity).toBe('purple');
     expect(result[0].quantity).toBe(2);
 
@@ -85,12 +85,12 @@ describe('extractInvasionLoot', () => {
     const [result] = await extractInvasionLoot(fakeImage, 'test-key');
     // Clamped h (before margin) is w * 1.2 = 0.12 (round 10: tightened from 1.4), then the
     // usual top/bottom margins are added on top of that clamped value, not the original 0.3.
-    // Round 13 adds a y-proportional term to the top margin, so the total top margin here
-    // is bigger than a pure per-icon-height ratio would give — h ends up close to (but
-    // still below) the original unclamped h of 0.3, so compare against that instead of a
-    // now-stale absolute threshold.
+    // Round 13 adds a y-proportional term to the top margin (coefficient cut in round 14
+    // after it overshot live), so the total top margin here is bigger than a pure
+    // per-icon-height ratio would give — h stays comfortably below the original unclamped
+    // h of 0.3.
     expect(result.h).toBeLessThan(0.3);
-    expect(result.y).toBeCloseTo(0.2 - (0.12 * 0.3 + 0.2 * 0.2)); // top edge, height + y-drift margin
+    expect(result.y).toBeCloseTo(0.2 - (0.12 * 0.3 + 0.2 * 0.04)); // top edge, height + y-drift margin
   });
 
   it('clamps the margin expansion so a box near the image edge never exceeds 0..1', async () => {

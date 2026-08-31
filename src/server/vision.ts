@@ -105,9 +105,15 @@ const TOP_MARGIN_RATIO = 0.3;
 // a flat margin, however large, is a constant and can never catch up with an error that
 // scales with how far down the source image the icon sits. Add a second, independent term
 // proportional to the item's own y so lower rows get proportionally more cushion than the
-// top row does. Coefficient is a first estimate, not measured — expect to retune once the
-// next live test shows whether it over- or under-shoots for rows near the bottom.
-const Y_DRIFT_MARGIN_RATIO = 0.2;
+// top row does.
+//
+// Round 14: 0.2 was a massive overshoot, not a slight one — a live test showed crops for
+// lower rows swallowing the ENTIRE previous row's boss-name text with no icon graphic left
+// in frame at all, confirming the drift itself is much smaller than guessed. Cut the
+// coefficient to roughly a fifth; still pending a live measurement, but the failure mode of
+// "too much" is now demonstrated to be far worse than the failure mode of "too little" this
+// round is correcting for, so erring toward under-shooting again is the safer direction.
+const Y_DRIFT_MARGIN_RATIO = 0.04;
 
 // Round 9: pure prompt wording turned out unstable run-to-run — fixing "too much blank
 // space above" (round 8) brought back "bleeds into the next row's text" (round 5's bug)
