@@ -68,6 +68,13 @@ export async function extractInvasionLoot(
     body: JSON.stringify({
       model: MODEL,
       max_tokens: MAX_TOKENS,
+      // Forced tool_choice (below) is incompatible with thinking on this model — Sonnet 5
+      // runs adaptive thinking by default when `thinking` is omitted, which the API
+      // rejects outright when combined with a forced tool: "forced tool_choice is
+      // incompatible with thinking ... use auto/none or disable thinking" (confirmed via
+      // a live 400 from a real deployment). Structured box/rarity/quantity extraction
+      // doesn't need deep reasoning anyway.
+      thinking: { type: 'disabled' },
       tools: [
         {
           name: 'extract_trophy_loot',

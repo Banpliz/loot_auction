@@ -48,6 +48,9 @@ describe('extractInvasionLoot', () => {
     const body = JSON.parse(options.body);
     expect(body.model).toBe('claude-sonnet-5');
     expect(body.tool_choice).toEqual({ type: 'tool', name: 'extract_trophy_loot' });
+    // Forced tool_choice + default (adaptive) thinking is rejected outright by the API
+    // ("forced tool_choice is incompatible with thinking") — must be explicitly disabled.
+    expect(body.thinking).toEqual({ type: 'disabled' });
     const imageBlock = body.messages[0].content.find((b: any) => b.type === 'image');
     expect(imageBlock.source.media_type).toBe('image/jpeg');
     expect(imageBlock.source.data).toBe(fakeImage.toString('base64'));
