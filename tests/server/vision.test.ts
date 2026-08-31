@@ -1,8 +1,25 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest';
+import sharp from 'sharp';
 import { extractInvasionLoot } from '../../src/server/vision';
 
 describe('extractInvasionLoot', () => {
-  const fakeImage = Buffer.from('fake-image-bytes');
+  // Round 21 added a real image-content check (vision.ts's hasVisualContent), so these
+  // fixtures need to be actual decodable images, not a placeholder string buffer. fakeImage
+  // is random noise everywhere, big enough that any fractional box used across these tests
+  // lands on real pixel variance. blankImage is a single flat color, standing in for a
+  // phantom box over blank panel background or a solid-color UI element.
+  let fakeImage: Buffer;
+  let blankImage: Buffer;
+
+  beforeAll(async () => {
+    const size = 100;
+    const noise = Buffer.alloc(size * size * 3);
+    for (let i = 0; i < noise.length; i++) noise[i] = Math.floor(Math.random() * 256);
+    fakeImage = await sharp(noise, { raw: { width: size, height: size, channels: 3 } }).png().toBuffer();
+    blankImage = await sharp({
+      create: { width: size, height: size, channels: 3, background: { r: 230, g: 220, b: 200 } },
+    }).png().toBuffer();
+  });
 
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -190,6 +207,27 @@ describe('extractInvasionLoot', () => {
       }),
     });
     const result = await extractInvasionLoot(fakeImage, 'test-key');
+    expect(result).toHaveLength(0);
+  });
+
+  it('skips a geometrically valid box whose crop has no real visual content (round 21)', async () => {
+    mockFetchOnce({
+      ok: true,
+      json: async () => ({
+        content: [{
+          type: 'tool_use',
+          input: {
+            items: [
+              { x: 0.1, y: 0.1, w: 0.1, h: 0.1, rarity: 'blue', quantity: 1 },
+              { x: 0.5, y: 0.5, w: 0.1, h: 0.1, rarity: 'blue', quantity: 1 },
+            ],
+          },
+        }],
+      }),
+    });
+    // blankImage is a flat single color everywhere, so BOTH boxes land on a blank crop —
+    // a phantom box over the panel background or a solid-color tab, not a real icon.
+    const result = await extractInvasionLoot(blankImage, 'test-key');
     expect(result).toHaveLength(0);
   });
 

@@ -1,3 +1,5 @@
+import sharp from 'sharp';
+
 const MODEL = 'claude-sonnet-5';
 const DEFAULT_BASE_URL = 'https://api.anthropic.com';
 const ANTHROPIC_VERSION = '2023-06-01';
@@ -154,6 +156,15 @@ const MAX_HEIGHT_TO_WIDTH_RATIO = 1.2;
 // sliver of the neighbor showing, so loosen this to only catch genuinely extreme cases.
 const MAX_WIDTH_TO_HEIGHT_RATIO = 1.5;
 
+// Round 21: even with content selection mostly working, live tests keep showing a handful
+// of phantom boxes over the panel's blank cream background or the bottom tab bar's solid
+// color — no icon in them at all. Round 18 tried fixing this by naming the tab bar in the
+// prompt and it made content selection MUCH worse batch-wide (reverted, round 20), so this
+// is a code-side check instead: a real reward icon (rarity-frame + artwork, or a chest) always
+// has real color variance; a blank panel or a solid UI-chrome crop is close to flat. Reject
+// crops whose pixel stdev falls under this — measured on a 0-255 channel scale.
+const MIN_CONTENT_STDEV = 10;
+
 // baseUrl defaults to Anthropic's own endpoint, but can be pointed at a wire-compatible
 // proxy (same x-api-key header, same /v1/messages request/response shape, just a
 // different domain) — some resellers front Anthropic's API this way, which is simpler to
@@ -248,12 +259,33 @@ export async function extractInvasionLoot(
   const items: VisionLotItem[] = [];
   for (let i = 0; i < toolUse.input.items.length; i++) {
     try {
-      items.push(validateItem(toolUse.input.items[i], i));
+      const item = validateItem(toolUse.input.items[i], i);
+      // Round 21: also drop the item if its own crop turns out to have no real content —
+      // see MIN_CONTENT_STDEV above. A geometrically valid box is not proof of a real icon.
+      if (await hasVisualContent(imageBuffer, item)) {
+        items.push(item);
+      } else {
+        console.warn(`extractInvasionLoot: skipping item ${i}: crop has no real visual content (blank/solid-color box)`);
+      }
     } catch (err) {
       console.warn(`extractInvasionLoot: skipping invalid item ${i}: ${(err as Error).message}`);
     }
   }
   return items;
+}
+
+async function hasVisualContent(imageBuffer: Buffer, box: { x: number; y: number; w: number; h: number }): Promise<boolean> {
+  const { width, height } = await sharp(imageBuffer).metadata();
+  if (!width || !height) return true; // can't check — don't block on a metadata read failure
+
+  const left = Math.max(0, Math.min(width - 1, Math.round(box.x * width)));
+  const top = Math.max(0, Math.min(height - 1, Math.round(box.y * height)));
+  const cropWidth = Math.max(1, Math.min(width - left, Math.round(box.w * width)));
+  const cropHeight = Math.max(1, Math.min(height - top, Math.round(box.h * height)));
+
+  const { channels } = await sharp(imageBuffer).extract({ left, top, width: cropWidth, height: cropHeight }).stats();
+  const avgStdev = channels.reduce((sum, c) => sum + c.stdev, 0) / channels.length;
+  return avgStdev >= MIN_CONTENT_STDEV;
 }
 
 function validateItem(raw: unknown, index: number): VisionLotItem {
