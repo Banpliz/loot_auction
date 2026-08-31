@@ -100,6 +100,15 @@ const MARGIN_RATIO = 0.08;
 const SIDE_MARGIN_RATIO = 0.03;
 const TOP_MARGIN_RATIO = 0.3;
 
+// Round 13: round 12 fixed the FIRST lot in a batch (matches the reference exactly now),
+// but confirmed the top-edge drift keeps growing lot over lot within the same screenshot —
+// a flat margin, however large, is a constant and can never catch up with an error that
+// scales with how far down the source image the icon sits. Add a second, independent term
+// proportional to the item's own y so lower rows get proportionally more cushion than the
+// top row does. Coefficient is a first estimate, not measured — expect to retune once the
+// next live test shows whether it over- or under-shoots for rows near the bottom.
+const Y_DRIFT_MARGIN_RATIO = 0.2;
+
 // Round 9: pure prompt wording turned out unstable run-to-run — fixing "too much blank
 // space above" (round 8) brought back "bleeds into the next row's text" (round 5's bug)
 // for some icons in the same batch. Rather than keep chasing wording, enforce the one
@@ -230,7 +239,7 @@ function validateItem(raw: unknown, index: number): VisionLotItem {
   const clampedH = Math.min(item.h, item.w * MAX_HEIGHT_TO_WIDTH_RATIO);
 
   const marginX = item.w * SIDE_MARGIN_RATIO;
-  const marginTop = clampedH * TOP_MARGIN_RATIO;
+  const marginTop = clampedH * TOP_MARGIN_RATIO + item.y * Y_DRIFT_MARGIN_RATIO;
   const marginBottom = clampedH * MARGIN_RATIO;
   const x = Math.max(0, item.x - marginX);
   const y = Math.max(0, item.y - marginTop);
