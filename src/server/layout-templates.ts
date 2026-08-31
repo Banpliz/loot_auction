@@ -44,11 +44,11 @@ export interface LayoutTemplate {
   iconBox?: Box;
 }
 
-export const LAYOUT_TEMPLATES: Record<Template, LayoutTemplate> = {
+export const LAYOUT_TEMPLATES: Partial<Record<Template, LayoutTemplate>> = {
   feast: {
     // Measured pixel-exact from a real 1177x2560 "Пир победы" screenshot
-    // (2026-08-27), same method as invasion below: row-unit (countdown pill)
-    // tops at y=712/972/1231/1491/1750/2010 → contentTop=712/2560,
+    // (2026-08-27): row-unit (countdown pill) tops at
+    // y=712/972/1231/1491/1750/2010 → contentTop=712/2560,
     // rowHeight=(2010-712)/5/2560. The old eyeballed contentTop=0.43 was
     // close by coincidence-ish but still off by several rows' worth of drift
     // by the time it reached the last row of a long list.
@@ -63,21 +63,6 @@ export const LAYOUT_TEMPLATES: Record<Template, LayoutTemplate> = {
     // x=136/311 of 1177, top/bottom at row-offset 58/220 of a 259.5 row.
     // Measured the same way as contentTop/rowHeight above.
     iconBox: { x: 0.115, y: 0.223, w: 0.149, h: 0.626 },
-  },
-  invasion: {
-    // Measured pixel-exact from a real 720x1565 "Аукцион вторжения"
-    // screenshot (2026-08-26): row-unit clock-pill tops at y=687/852/1018/
-    // 1183 → contentTop=687/1565, rowHeight=(1183-687)/3/1565. The old
-    // eyeballed contentTop=0.5 combined with (1-contentTop)/rows for row
-    // height put every slice about a third of a row too low and stretched
-    // each one ~30px too tall, so slices straddled two items — see chat
-    // 2026-08-26 for the before/after screenshots.
-    contentTop: 0.439,
-    rowHeight: 0.106,
-    colorSample: { x: 0.12, y: 0.62 },
-    // The rarity-diamond badge (level + sprite + stack count). Measured the
-    // same way as contentTop/rowHeight above.
-    iconBox: { x: 0.1, y: 0.12, w: 0.18, h: 0.75 },
   },
 };
 

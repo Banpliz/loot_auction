@@ -1,5 +1,5 @@
 import sharp from 'sharp';
-import { LAYOUT_TEMPLATES, type Template } from './layout-templates';
+import { LAYOUT_TEMPLATES } from './layout-templates';
 
 export type RarityColor = 'blue' | 'purple' | 'red';
 
@@ -11,8 +11,11 @@ const REFERENCE_COLORS: Record<RarityColor, [number, number, number]> = {
 
 const PATCH_SIZE = 6;
 
-export async function detectColor(stripPath: string, template: Template): Promise<RarityColor> {
-  const { colorSample } = LAYOUT_TEMPLATES[template];
+export async function detectColor(stripPath: string, template: 'feast'): Promise<RarityColor> {
+  // Non-null assertion is safe: 'feast' is always present in LAYOUT_TEMPLATES (invasion's
+  // entry was removed once its screenshots stopped using pixel-grid recognition — see
+  // docs/superpowers/specs/2026-08-31-invasion-vision-recognition-design.md).
+  const { colorSample } = LAYOUT_TEMPLATES[template]!;
   const image = sharp(stripPath);
   const metadata = await image.metadata();
   const width = metadata.width ?? 0;

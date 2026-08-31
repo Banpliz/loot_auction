@@ -38,38 +38,12 @@ describe('detectColor', () => {
 
   it('matches a solid red strip to red', async () => {
     const file = await solidStrip('red.png', [209, 67, 78]);
-    expect(await detectColor(file, 'invasion')).toBe('red');
+    expect(await detectColor(file, 'feast')).toBe('red');
   });
 
   it('returns some valid color instead of throwing on an ambiguous input', async () => {
     const file = await solidStrip('gray.png', [128, 128, 128]);
     const result = await detectColor(file, 'feast');
     expect(['blue', 'purple', 'red']).toContain(result);
-  });
-
-  it('samples below the countdown-pill band for the invasion template', async () => {
-    // Invasion row-units have a countdown pill (top ~25%, unrelated color)
-    // above the actual item card (bottom ~75%, carries the rarity color) —
-    // colorSample.y = 0.62 must land in the card band, not the pill.
-    const file = path.join(tmpDir, 'invasion-row.png');
-    const width = 200;
-    const height = 100;
-    const pillHeight = Math.round(height * 0.25);
-    await sharp({ create: { width, height, channels: 3, background: { r: 209, g: 67, b: 78 } } })
-      .composite([
-        {
-          input: await sharp({
-            create: { width, height: pillHeight, channels: 3, background: { r: 230, g: 180, b: 90 } },
-          })
-            .png()
-            .toBuffer(),
-          top: 0,
-          left: 0,
-        },
-      ])
-      .png()
-      .toFile(file);
-
-    expect(await detectColor(file, 'invasion')).toBe('red');
   });
 });
