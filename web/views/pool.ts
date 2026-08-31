@@ -43,7 +43,7 @@ export async function renderPool(root: HTMLElement) {
   const allItems = data.items as Item[];
   const listEl = root.querySelector('.lots') as HTMLElement;
   const renderItem = (item: Item) => `
-      <div class="lot-row" data-id="${item.id}" style="border-left: 4px solid ${colorHex(item.color)}">
+      <div class="lot-row" data-id="${item.id}" style="border-left: 4px solid ${item.status === 'auctioned' ? 'var(--border)' : colorHex(item.color)}">
         <img src="/uploads/${item.imagePath}" alt="${escapeHtml(item.name) || 'Лот'}" />
         <div class="lot-row__info">
           ${item.name ? `<p class="lot-row__name">${escapeHtml(item.name)}</p>` : ''}
@@ -53,10 +53,10 @@ export async function renderPool(root: HTMLElement) {
           item.status === 'auctioned'
             ? item.winners.length > 0
               ? `<details class="winners">
-                   <summary>Победители (${item.winners.length})</summary>
+                   <summary>Забрали (${item.winners.length})</summary>
                    <p>${item.winners.map((w) => escapeHtml(w.nickname ?? '—')).join(', ')}</p>
                  </details>`
-              : `<p class="badge">Разыграно: —</p>`
+              : `<p class="badge">Раскуплено: —</p>`
             : biddingClosed
               ? `<p class="badge">Приём заявок окончен</p>`
               : item.claimedByMe
