@@ -56,6 +56,20 @@ describe('extractInvasionLoot', () => {
     expect(textBlock.text.toLowerCase()).toMatch(/игнорир/); // instructed to ignore boss name/rank
   });
 
+  it('calls a custom baseUrl instead of api.anthropic.com when one is passed', async () => {
+    const fetchMock = mockFetchOnce({
+      ok: true,
+      json: async () => ({
+        content: [{ type: 'tool_use', input: { items: [{ x: 0.1, y: 0.1, w: 0.1, h: 0.1, rarity: 'blue', quantity: 1 }] } }],
+      }),
+    });
+
+    await extractInvasionLoot(fakeImage, 'test-key', 'https://router.example');
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe('https://router.example/v1/messages');
+  });
+
   it('throws with the status code when the API responds non-2xx', async () => {
     mockFetchOnce({ ok: false, status: 500, text: async () => 'server error' });
     await expect(extractInvasionLoot(fakeImage, 'test-key')).rejects.toThrow(/500/);

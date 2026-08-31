@@ -6,4 +6,5 @@ export interface AppDeps {
   adminTelegramIds: number[];
   dataDir: string;
   anthropicApiKey?: string;
+  anthropicBaseUrl?: string;
 }

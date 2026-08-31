@@ -9,7 +9,14 @@ const config = loadConfig();
 fs.mkdirSync(config.dataDir, { recursive: true });
 const db = openDb(path.join(config.dataDir, 'app.db'));
 const app = buildServer(
-  { db, botToken: config.botToken, adminTelegramIds: config.adminTelegramIds, dataDir: config.dataDir, anthropicApiKey: config.anthropicApiKey },
+  {
+    db,
+    botToken: config.botToken,
+    adminTelegramIds: config.adminTelegramIds,
+    dataDir: config.dataDir,
+    anthropicApiKey: config.anthropicApiKey,
+    anthropicBaseUrl: config.anthropicBaseUrl,
+  },
   path.join(process.cwd(), 'dist', 'web')
 );
 const bot = createBot(config.botToken, config.miniAppUrl);

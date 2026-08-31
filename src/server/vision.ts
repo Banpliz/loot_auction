@@ -1,5 +1,5 @@
 const MODEL = 'claude-sonnet-5';
-const API_URL = 'https://api.anthropic.com/v1/messages';
+const DEFAULT_BASE_URL = 'https://api.anthropic.com';
 const ANTHROPIC_VERSION = '2023-06-01';
 // Generous headroom: Sonnet 5 runs adaptive thinking by default when `thinking` is
 // omitted, and its tokenizer is denser than older models — a tight budget here risks
@@ -45,12 +45,20 @@ const PROMPT = `Это скриншот экрана "Трофеи" из моб�
 - rarity — цвет рамки редкости иконки: "blue", "purple" или "red";
 - quantity — число с маленького бейджика "×N" в углу иконки (если бейджика не видно, используй 1).`;
 
-export async function extractInvasionLoot(imageBuffer: Buffer, apiKey: string): Promise<VisionLotItem[]> {
+// baseUrl defaults to Anthropic's own endpoint, but can be pointed at a wire-compatible
+// proxy (same x-api-key header, same /v1/messages request/response shape, just a
+// different domain) — some resellers front Anthropic's API this way, which is simpler to
+// pay through than a direct Anthropic account for some. No trailing slash expected.
+export async function extractInvasionLoot(
+  imageBuffer: Buffer,
+  apiKey: string,
+  baseUrl: string = DEFAULT_BASE_URL
+): Promise<VisionLotItem[]> {
   if (!apiKey) {
     throw new Error('ANTHROPIC_API_KEY is not configured');
   }
 
-  const res = await fetch(API_URL, {
+  const res = await fetch(`${baseUrl}/v1/messages`, {
     method: 'POST',
     headers: {
       'x-api-key': apiKey,

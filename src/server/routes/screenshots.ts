@@ -139,7 +139,7 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
         } else {
           let visionItems;
           try {
-            visionItems = await extractInvasionLoot(fileBuffers[f], deps.anthropicApiKey!);
+            visionItems = await extractInvasionLoot(fileBuffers[f], deps.anthropicApiKey!, deps.anthropicBaseUrl);
           } catch (err) {
             request.log.error({ err }, 'invasion vision extraction failed');
             reply.code(502).send({ error: `Не удалось распознать скриншот: ${(err as Error).message}` });

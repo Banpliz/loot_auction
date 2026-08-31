@@ -28,4 +28,12 @@ describe('loadConfig', () => {
     const config = loadConfig({ ...base, DATA_DIR: './data' });
     expect(path.isAbsolute(config.dataDir)).toBe(true);
   });
+
+  it('defaults ANTHROPIC_BASE_URL to api.anthropic.com and strips a trailing slash when set', () => {
+    const withDefault = loadConfig(base);
+    expect(withDefault.anthropicBaseUrl).toBe('https://api.anthropic.com');
+
+    const withOverride = loadConfig({ ...base, ANTHROPIC_BASE_URL: 'https://router.example/' });
+    expect(withOverride.anthropicBaseUrl).toBe('https://router.example');
+  });
 });
