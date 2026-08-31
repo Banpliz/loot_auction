@@ -4,6 +4,7 @@ import type { AppDeps } from '../types';
 import { requireAdmin } from '../auth';
 import { computeIconSignature, isGenericChestIcon } from '../dedup';
 import { rememberLot } from '../lot-library';
+import { winLimitGroup } from './events';
 
 const VALID_COLORS = new Set(['blue', 'purple', 'red']);
 const VALID_CATEGORIES = new Set(['item', 'stone']);
@@ -30,6 +31,28 @@ function isPastDeadline(deps: AppDeps, eventId: number): boolean {
     | { deadline_at: string | null }
     | undefined;
   return !!event?.deadline_at && new Date(event.deadline_at).getTime() < Date.now();
+}
+
+// Tallies this user's current claims for the event by win-limit-group key (see
+// winLimitGroup in events.ts) — the live, per-attempt equivalent of the counter the old
+// end-of-event draw used to build once over the whole claimant pool.
+function getUserGroupCounts(deps: AppDeps, eventId: number, userId: number): Map<string, number> {
+  const rows = deps.db
+    .prepare(
+      `SELECT i.color, i.category, s.template
+       FROM claims c
+       JOIN items i ON i.id = c.item_id
+       JOIN screenshots s ON s.id = i.screenshot_id
+       WHERE i.event_id = ? AND c.telegram_id = ?`
+    )
+    .all(eventId, userId) as { color: string; category: string; template: string }[];
+
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const { key } = winLimitGroup(row.template, row.color, row.category);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
 }
 
 export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
@@ -177,14 +200,27 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
     const itemId = Number(request.params.id);
     const userId = request.telegramUser!.telegramId;
 
-    const item = deps.db.prepare('SELECT status, event_id FROM items WHERE id = ?').get(itemId) as
-      | { status: string; event_id: number }
+    const item = deps.db
+      .prepare(
+        `SELECT i.status, i.event_id, i.quantity, i.color, i.category, s.template
+         FROM items i JOIN screenshots s ON s.id = i.screenshot_id
+         WHERE i.id = ?`
+      )
+      .get(itemId) as
+      | { status: string; event_id: number; quantity: number; color: string; category: string; template: string }
       | undefined;
     if (!item || item.status !== 'pool') {
       reply.code(409).send({ error: 'item is not claimable' });
       return;
     }
 
+    const event = deps.db.prepare('SELECT status FROM events WHERE id = ?').get(item.event_id) as
+      | { status: string }
+      | undefined;
+    if (!event || event.status !== 'open') {
+      reply.code(409).send({ error: 'auction is not open' });
+      return;
+    }
     // The UI hides the bid button once the countdown runs out, but only enforcing it
     // there means a request sent straight to the API (or a stale page left open past
     // the deadline) can still place a bid — the deadline has to be checked server-side
@@ -194,7 +230,31 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
       return;
     }
 
-    deps.db.prepare('INSERT OR IGNORE INTO claims (item_id, telegram_id) VALUES (?, ?)').run(itemId, userId);
+    const already = deps.db.prepare('SELECT 1 FROM claims WHERE item_id = ? AND telegram_id = ?').get(itemId, userId);
+    if (already) {
+      reply.code(409).send({ error: 'already claimed' });
+      return;
+    }
+
+    const { key, limit, exclusiveWith } = winLimitGroup(item.template, item.color, item.category);
+    const counts = getUserGroupCounts(deps, item.event_id, userId);
+    if ((counts.get(key) ?? 0) >= limit) {
+      reply.code(409).send({ error: 'win limit reached' });
+      return;
+    }
+    if (exclusiveWith && (counts.get(exclusiveWith) ?? 0) > 0) {
+      reply.code(409).send({ error: 'already won in the other category' });
+      return;
+    }
+
+    // Claiming a lot immediately reserves one unit of it — first come, first served —
+    // instead of just registering interest for a later random draw.
+    deps.db.prepare('INSERT INTO claims (item_id, telegram_id) VALUES (?, ?)').run(itemId, userId);
+    const remaining = item.quantity - 1;
+    deps.db
+      .prepare('UPDATE items SET quantity = ?, status = ? WHERE id = ?')
+      .run(remaining, remaining <= 0 ? 'auctioned' : 'pool', itemId);
+
     return { ok: true };
   });
 
@@ -203,12 +263,22 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
     const userId = request.telegramUser!.telegramId;
 
     const item = deps.db.prepare('SELECT event_id FROM items WHERE id = ?').get(itemId) as { event_id: number } | undefined;
-    if (item && isPastDeadline(deps, item.event_id)) {
-      reply.code(409).send({ error: 'bidding has ended' });
-      return;
+    if (item) {
+      const event = deps.db.prepare('SELECT status FROM events WHERE id = ?').get(item.event_id) as
+        | { status: string }
+        | undefined;
+      if (event?.status !== 'open' || isPastDeadline(deps, item.event_id)) {
+        reply.code(409).send({ error: 'bidding has ended' });
+        return;
+      }
     }
 
-    deps.db.prepare('DELETE FROM claims WHERE item_id = ? AND telegram_id = ?').run(itemId, userId);
+    const result = deps.db.prepare('DELETE FROM claims WHERE item_id = ? AND telegram_id = ?').run(itemId, userId);
+    if (result.changes > 0 && item) {
+      // Giving the unit back always returns the lot to 'pool', even if claiming it was
+      // what had taken it to 'auctioned' (sold out) — the quantity math is symmetric.
+      deps.db.prepare("UPDATE items SET quantity = quantity + 1, status = 'pool' WHERE id = ?").run(itemId);
+    }
     return { ok: true };
   });
 }
