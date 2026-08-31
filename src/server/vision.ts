@@ -88,9 +88,17 @@ const PROMPT = `Это скриншот экрана "Трофеи" из моб�
 // because rows have real empty panel gap between them (room to pad top/bottom safely) but
 // icons within one row sit close together (little room to pad sideways without touching
 // the neighbor) — one shared ratio for both directions was never going to fit both cases.
+//
+// Round 12: 0.07 wasn't nearly enough — a live test across one batch showed the model's y
+// (top edge) running progressively later for lots further down the same screenshot, up to
+// cutting well into the icon's own graphic on later rows, not just its label. A margin
+// proportional to the icon's own (small) height can't out-run an error that grows with
+// vertical position in the source image, so the ratio goes up a lot, not a little — a
+// wider crop with some cream background above is a strictly smaller problem than losing
+// part of the reward icon itself.
 const MARGIN_RATIO = 0.08;
 const SIDE_MARGIN_RATIO = 0.03;
-const TOP_MARGIN_RATIO = 0.07;
+const TOP_MARGIN_RATIO = 0.3;
 
 // Round 9: pure prompt wording turned out unstable run-to-run — fixing "too much blank
 // space above" (round 8) brought back "bleeds into the next row's text" (round 5's bug)
