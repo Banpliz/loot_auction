@@ -70,14 +70,24 @@ constrains its output to the schema, so parsing is just reading
 JSON-extraction fragility.
 
 Model: `claude-sonnet-5` (a top-level constant in `vision.ts`, see Non-goals on why
-this isn't configurable). `max_tokens: 1024` — comfortably covers a few dozen items
-at ~6 fields each.
+this isn't configurable). `max_tokens: 8000` — generous headroom, not a tight budget:
+Sonnet 5 runs adaptive thinking by default when `thinking` is omitted (unlike older
+models), and its tokenizer is denser than prior generations, so a tight budget sized
+just for the item JSON risks truncating mid-array on a screenshot with many icons — an
+error none of the tests can catch, since they all stub `fetch`. Paying for headroom
+that goes unused costs nothing extra; only tokens actually generated are billed. The
+response's `stop_reason` is checked and treated as an error if it's `'max_tokens'`,
+so a truncation that somehow still happens fails loudly instead of silently returning
+a partial item list.
 
-Validates every returned item (`x/y/w/h` are finite numbers, `rarity` is one of the
-three values, `quantity` is a positive integer) and throws a descriptive `Error` if
-the API call fails (non-2xx), the response has no `tool_use` block, or any item
-fails validation — the caller doesn't need to guess what went wrong from a generic
-parse failure.
+Validates every returned item (`x/y/w/h` are finite numbers in `[0,1]` and `x+w`/`y+h`
+each stay within `1` — a box the model places right at the image edge would otherwise
+reach `cropBox` with a region that extends past the source image and throws a raw
+sharp error instead of a clean validation message; `rarity` is one of the three
+values; `quantity` is a positive integer) and throws a descriptive `Error` if the API
+call fails (non-2xx), the response has no `tool_use` block, or any item fails
+validation — the caller doesn't need to guess what went wrong from a generic parse
+failure.
 
 ### Config & wiring
 
@@ -167,10 +177,13 @@ The "Строк на каждом скрине" (`rows`) input is only relevant 
 `change` listener on the template `<select>` that toggles the `rows` input's
 `disabled`/`required` attributes (hidden via existing `style.display`, no new CSS) —
 disabled+not-required when `invasion` is selected, so the browser doesn't block
-submission on an empty field the server no longer reads, and the field is simply
-omitted from the submitted `FormData` when disabled (standard HTML form behavior —
-no extra code needed to strip it). Upload-flow help text gets one added sentence
-noting invasion screenshots are read automatically, no row count needed.
+submission on an empty field the server no longer reads. Note: the submit handler
+builds its own `FormData` by hand rather than submitting the form natively (it always
+reads `rows`'s `.value` and appends it), so `disabled` does *not* strip the field the
+way it would on a native form submit — it's still sent (as an empty string, harmless,
+since the server only validates/reads `rows` for `template === 'feast'`). Upload-flow
+help text gets one added sentence noting invasion screenshots are read automatically,
+no row count needed, and naming the actual screen to capture ("Трофеи").
 
 ## Error handling
 
