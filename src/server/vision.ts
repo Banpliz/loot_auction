@@ -238,12 +238,6 @@ function validateItem(raw: unknown, index: number): VisionLotItem {
   if (!isFraction(item.x) || !isFraction(item.y) || !isFraction(item.w) || !isFraction(item.h)) {
     throw new Error(`item ${index}: x/y/w/h must be numbers between 0 and 1`);
   }
-  // A box right at the image edge (e.g. x=1) can produce a crop region that extends past
-  // the source image — cropBox doesn't fully guard against this and would throw a raw
-  // sharp error instead of a clean, catchable validation message.
-  if (item.x + item.w > 1 || item.y + item.h > 1) {
-    throw new Error(`item ${index}: box extends past the image edge (x+w or y+h > 1)`);
-  }
   if (item.rarity !== 'blue' && item.rarity !== 'purple' && item.rarity !== 'red') {
     throw new Error(`item ${index}: rarity must be blue, purple, or red`);
   }
@@ -251,15 +245,24 @@ function validateItem(raw: unknown, index: number): VisionLotItem {
     throw new Error(`item ${index}: quantity must be a positive integer`);
   }
 
+  // Round 17: a box right at the image edge (e.g. a bottom-row icon the model estimates as
+  // slightly taller than the space left below it) used to abort the ENTIRE upload with a
+  // validation error — a live test hit this on one icon out of a whole batch, losing every
+  // other icon in it too. A box merely touching or slightly overshooting the edge is
+  // trivially recoverable by trimming it to fit, so clamp instead of rejecting; only a
+  // genuinely nonsensical box (caught by the isFraction checks above) still throws.
+  const rawW = Math.min(item.w, 1 - item.x);
+  const rawH = Math.min(item.h, 1 - item.y);
+
   // Hard ceiling, enforced in code rather than trusted from the model: icons are always
   // roughly square to a bit taller than wide (see the prompt's own description), never a
   // tall rectangle. A model-returned h taller than this relative to w is symptomatic of
   // exactly one thing seen live — the box reaching past the icon into the next panel
   // row's text — so clamp it down (anchored at the same top edge) rather than trust it.
-  const clampedH = Math.min(item.h, item.w * MAX_HEIGHT_TO_WIDTH_RATIO);
+  const clampedH = Math.min(rawH, rawW * MAX_HEIGHT_TO_WIDTH_RATIO);
   // Anchored at the left edge (x unchanged), same reasoning as the height ceiling above —
   // trims a too-wide box strictly off the right, which is where the bleed was reported.
-  const clampedW = Math.min(item.w, item.h * MAX_WIDTH_TO_HEIGHT_RATIO);
+  const clampedW = Math.min(rawW, rawH * MAX_WIDTH_TO_HEIGHT_RATIO);
 
   const marginX = clampedW * SIDE_MARGIN_RATIO;
   const marginTop = clampedH * TOP_MARGIN_RATIO + item.y * Y_DRIFT_MARGIN_RATIO;

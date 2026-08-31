@@ -192,13 +192,17 @@ describe('extractInvasionLoot', () => {
     await expect(extractInvasionLoot(fakeImage, 'test-key')).rejects.toThrow('truncated');
   });
 
-  it('throws when a box extends past the image edge (x+w > 1)', async () => {
+  it('clamps a box that overshoots the image edge instead of rejecting the whole upload (round 17)', async () => {
     mockFetchOnce({
       ok: true,
       json: async () => ({
+        // w = 0.5 pushes x+w to 1.3 — used to throw and abort every other icon in the same
+        // batch along with it; a live test hit exactly this on one icon in a real upload.
         content: [{ type: 'tool_use', input: { items: [{ x: 0.8, y: 0.1, w: 0.5, h: 0.1, rarity: 'blue', quantity: 1 }] } }],
       }),
     });
-    await expect(extractInvasionLoot(fakeImage, 'test-key')).rejects.toThrow('edge');
+    const [result] = await extractInvasionLoot(fakeImage, 'test-key');
+    expect(result.x + result.w).toBeLessThanOrEqual(1);
+    expect(result.y + result.h).toBeLessThanOrEqual(1);
   });
 });
