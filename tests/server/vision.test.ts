@@ -71,6 +71,23 @@ describe('extractInvasionLoot', () => {
     expect(textBlock.text.toLowerCase()).toMatch(/игнорир/); // instructed to ignore boss name/rank
   });
 
+  it('clamps a too-tall box down to the max height-to-width ratio (bleeding into the next row)', async () => {
+    mockFetchOnce({
+      ok: true,
+      json: async () => ({
+        // h = 0.3 against w = 0.1 is a 3x ratio — symptomatic of the box reaching past
+        // the icon into the next panel row, which a live test showed really happens.
+        content: [{ type: 'tool_use', input: { items: [{ x: 0.2, y: 0.2, w: 0.1, h: 0.3, rarity: 'blue', quantity: 1 }] } }],
+      }),
+    });
+
+    const [result] = await extractInvasionLoot(fakeImage, 'test-key');
+    // Clamped h (before margin) is w * 1.4 = 0.14, then the usual top/bottom margins are
+    // added on top of that clamped value, not the original 0.3.
+    expect(result.h).toBeLessThan(0.2);
+    expect(result.y).toBeCloseTo(0.2 - 0.14 * 0.03); // top edge barely moves (small top margin)
+  });
+
   it('clamps the margin expansion so a box near the image edge never exceeds 0..1', async () => {
     mockFetchOnce({
       ok: true,

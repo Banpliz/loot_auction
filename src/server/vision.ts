@@ -84,6 +84,13 @@ const PROMPT = `Это скриншот экрана "Трофеи" из моб�
 const MARGIN_RATIO = 0.08;
 const TOP_MARGIN_RATIO = 0.03;
 
+// Round 9: pure prompt wording turned out unstable run-to-run — fixing "too much blank
+// space above" (round 8) brought back "bleeds into the next row's text" (round 5's bug)
+// for some icons in the same batch. Rather than keep chasing wording, enforce the one
+// geometric fact we already know for certain (icons are roughly square, at most ~1.3x
+// taller than wide) as a hard code-level ceiling instead of a prompt suggestion.
+const MAX_HEIGHT_TO_WIDTH_RATIO = 1.4;
+
 // baseUrl defaults to Anthropic's own endpoint, but can be pointed at a wire-compatible
 // proxy (same x-api-key header, same /v1/messages request/response shape, just a
 // different domain) — some resellers front Anthropic's API this way, which is simpler to
@@ -193,13 +200,20 @@ function validateItem(raw: unknown, index: number): VisionLotItem {
     throw new Error(`item ${index}: quantity must be a positive integer`);
   }
 
+  // Hard ceiling, enforced in code rather than trusted from the model: icons are always
+  // roughly square to a bit taller than wide (see the prompt's own description), never a
+  // tall rectangle. A model-returned h taller than this relative to w is symptomatic of
+  // exactly one thing seen live — the box reaching past the icon into the next panel
+  // row's text — so clamp it down (anchored at the same top edge) rather than trust it.
+  const clampedH = Math.min(item.h, item.w * MAX_HEIGHT_TO_WIDTH_RATIO);
+
   const marginX = item.w * MARGIN_RATIO;
-  const marginTop = item.h * TOP_MARGIN_RATIO;
-  const marginBottom = item.h * MARGIN_RATIO;
+  const marginTop = clampedH * TOP_MARGIN_RATIO;
+  const marginBottom = clampedH * MARGIN_RATIO;
   const x = Math.max(0, item.x - marginX);
   const y = Math.max(0, item.y - marginTop);
   const w = Math.min(1 - x, item.w + 2 * marginX);
-  const h = Math.min(1 - y, item.h + marginTop + marginBottom);
+  const h = Math.min(1 - y, clampedH + marginTop + marginBottom);
 
   return { x, y, w, h, rarity: item.rarity, quantity: item.quantity };
 }
