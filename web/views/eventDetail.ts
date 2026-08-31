@@ -76,14 +76,15 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
         автоматически — впиши вручную только если по иконке не понятно, что за лот
         (например, у сундуков одного вида, но разного уровня — учти, что такие лоты тоже
         объединятся в один, раз иконка совпадает, так что кол-во и пометку для них стоит
-        проверить особенно внимательно). Цену не показываем — участники и так видят её в
+        проверить особенно внимательно). Для вторжения строки указывать не нужно —
+        модель сама разберёт скриншот. Цену не показываем — участники и так видят её в
         игре. Редактировать лоты можно, пока не нажата «Начать аукцион» — после старта
         список блокируется.
       </p>
       <form id="screenshot-form">
         <div class="field-row">
-          <input name="rows" type="number" min="1" max="50" placeholder="Строк на каждом скрине" required />
-          <select name="template" required>
+          <input id="rows-input" name="rows" type="number" min="1" max="50" placeholder="Строк на каждом скрине" required />
+          <select id="template-select" name="template" required>
             <option value="feast">Пир победы</option>
             <option value="invasion">Аукцион вторжения</option>
           </select>
@@ -283,6 +284,16 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
   }
 
   if (status === 'draft') {
+    const templateSelect = root.querySelector('#template-select') as HTMLSelectElement;
+    const rowsInput = root.querySelector('#rows-input') as HTMLInputElement;
+    const syncRowsField = () => {
+      const isInvasion = templateSelect.value === 'invasion';
+      rowsInput.disabled = isInvasion;
+      rowsInput.required = !isInvasion;
+      rowsInput.style.display = isInvasion ? 'none' : '';
+    };
+    templateSelect.addEventListener('change', syncRowsField);
+    syncRowsField();
     (root.querySelector('#screenshot-form') as HTMLFormElement).addEventListener('submit', async (e) => {
       e.preventDefault();
       const form = e.target as HTMLFormElement;
