@@ -151,34 +151,46 @@ describe('extractInvasionLoot', () => {
     await expect(extractInvasionLoot(fakeImage, 'test-key')).rejects.toThrow('tool_use');
   });
 
-  it('throws when an item fails validation (bad rarity)', async () => {
+  it('skips (rather than aborting the whole screenshot on) an item with bad rarity', async () => {
     mockFetchOnce({
       ok: true,
       json: async () => ({
-        content: [{ type: 'tool_use', input: { items: [{ x: 0.1, y: 0.1, w: 0.1, h: 0.1, rarity: 'green', quantity: 1 }] } }],
+        content: [{
+          type: 'tool_use',
+          input: {
+            items: [
+              { x: 0.1, y: 0.1, w: 0.1, h: 0.1, rarity: 'green', quantity: 1 },
+              { x: 0.5, y: 0.5, w: 0.1, h: 0.1, rarity: 'blue', quantity: 1 },
+            ],
+          },
+        }],
       }),
     });
-    await expect(extractInvasionLoot(fakeImage, 'test-key')).rejects.toThrow('rarity');
+    const result = await extractInvasionLoot(fakeImage, 'test-key');
+    expect(result).toHaveLength(1);
+    expect(result[0].rarity).toBe('blue');
   });
 
-  it('throws when an item has a non-integer quantity', async () => {
+  it('skips an item with a non-integer quantity', async () => {
     mockFetchOnce({
       ok: true,
       json: async () => ({
         content: [{ type: 'tool_use', input: { items: [{ x: 0.1, y: 0.1, w: 0.1, h: 0.1, rarity: 'blue', quantity: 1.5 }] } }],
       }),
     });
-    await expect(extractInvasionLoot(fakeImage, 'test-key')).rejects.toThrow('quantity');
+    const result = await extractInvasionLoot(fakeImage, 'test-key');
+    expect(result).toHaveLength(0);
   });
 
-  it('throws when a box coordinate is out of the 0..1 range', async () => {
+  it('skips an item whose box coordinate is out of the 0..1 range', async () => {
     mockFetchOnce({
       ok: true,
       json: async () => ({
         content: [{ type: 'tool_use', input: { items: [{ x: 1.5, y: 0.1, w: 0.1, h: 0.1, rarity: 'blue', quantity: 1 }] } }],
       }),
     });
-    await expect(extractInvasionLoot(fakeImage, 'test-key')).rejects.toThrow('x/y/w/h');
+    const result = await extractInvasionLoot(fakeImage, 'test-key');
+    expect(result).toHaveLength(0);
   });
 
   it('throws when the response was truncated (stop_reason max_tokens)', async () => {

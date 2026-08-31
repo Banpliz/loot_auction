@@ -235,7 +235,20 @@ export async function extractInvasionLoot(
     throw new Error('Anthropic API response did not include the expected tool_use block');
   }
 
-  return toolUse.input.items.map((raw, i) => validateItem(raw, i));
+  // Round 19: one malformed item (bad rarity, NaN coordinates, whatever) used to throw and
+  // abort the WHOLE screenshot — and since the caller uploads several screenshots in one
+  // request and only writes results to the DB after every screenshot succeeds, one bad item
+  // anywhere in the batch discarded every other screenshot's already-good results too, a
+  // live test hit exactly this. Skip just the one bad item instead of failing the batch.
+  const items: VisionLotItem[] = [];
+  for (let i = 0; i < toolUse.input.items.length; i++) {
+    try {
+      items.push(validateItem(toolUse.input.items[i], i));
+    } catch (err) {
+      console.warn(`extractInvasionLoot: skipping invalid item ${i}: ${(err as Error).message}`);
+    }
+  }
+  return items;
 }
 
 function validateItem(raw: unknown, index: number): VisionLotItem {
