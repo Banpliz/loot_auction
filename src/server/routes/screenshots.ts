@@ -8,6 +8,7 @@ import { isTemplate, LAYOUT_TEMPLATES } from '../layout-templates';
 import { detectColor } from '../color-detect';
 import { computeIconSignature, groupBySignature, isSameIcon, isGenericChestIcon, type IconSignature } from '../dedup';
 import { findInLibrary } from '../lot-library';
+import { isEventDraft } from './items';
 
 interface SlicedRow {
   screenshotId: number;
@@ -21,6 +22,10 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
     { preHandler: requireAdmin(deps) },
     async (request, reply) => {
       const eventId = Number(request.params.id);
+      if (!isEventDraft(deps, eventId)) {
+        reply.code(409).send({ error: 'event is not in draft' });
+        return;
+      }
 
       // Read every part regardless of order. Multiple files can arrive in one request
       // (admin picks several screenshots at once); rows/template apply to all of them.

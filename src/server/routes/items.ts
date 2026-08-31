@@ -8,6 +8,20 @@ import { rememberLot } from '../lot-library';
 const VALID_COLORS = new Set(['blue', 'purple', 'red']);
 const VALID_CATEGORIES = new Set(['item', 'stone']);
 
+// Editing (name/color/category/quantity, remove, merge) is only allowed while the event
+// is still in draft. Once it's open, users may already be looking at (or claiming) these
+// exact lots, so admin edits are locked to avoid changing what someone already claimed
+// out from under them — see docs/superpowers/specs/2026-08-31-fcfs-reservation-design.md.
+export function isEventDraft(deps: AppDeps, eventId: number): boolean {
+  const event = deps.db.prepare('SELECT status FROM events WHERE id = ?').get(eventId) as { status: string } | undefined;
+  return event?.status === 'draft';
+}
+
+function itemEventId(deps: AppDeps, itemId: number): number | undefined {
+  const row = deps.db.prepare('SELECT event_id FROM items WHERE id = ?').get(itemId) as { event_id: number } | undefined;
+  return row?.event_id;
+}
+
 // Once bidding closes, nothing about a claim should be changeable — not just no new
 // bids, but no withdrawing one either, so a bidder can't dodge a win-limit group by
 // pulling out right before the draw. Shared by both claim and unclaim below.
@@ -23,6 +37,13 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
     '/items/:id',
     { preHandler: requireAdmin(deps) },
     async (request, reply) => {
+      const itemId = Number(request.params.id);
+      const eventId = itemEventId(deps, itemId);
+      if (eventId === undefined || !isEventDraft(deps, eventId)) {
+        reply.code(409).send({ error: 'event is not in draft' });
+        return;
+      }
+
       const { name, color, category, quantity } = request.body ?? {};
       if (name === undefined && color === undefined && category === undefined && quantity === undefined) {
         reply.code(400).send({ error: 'at least one of name, color, category, quantity is required' });
@@ -61,7 +82,6 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
         values.push(quantity);
       }
 
-      const itemId = Number(request.params.id);
       values.push(itemId);
       deps.db.prepare(`UPDATE items SET ${updates.join(', ')} WHERE id = ?`).run(...values);
 
@@ -90,8 +110,14 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
     }
   );
 
-  app.delete<{ Params: { id: string } }>('/items/:id', { preHandler: requireAdmin(deps) }, async (request) => {
-    deps.db.prepare("UPDATE items SET status = 'removed' WHERE id = ?").run(Number(request.params.id));
+  app.delete<{ Params: { id: string } }>('/items/:id', { preHandler: requireAdmin(deps) }, async (request, reply) => {
+    const itemId = Number(request.params.id);
+    const eventId = itemEventId(deps, itemId);
+    if (eventId === undefined || !isEventDraft(deps, eventId)) {
+      reply.code(409).send({ error: 'event is not in draft' });
+      return;
+    }
+    deps.db.prepare("UPDATE items SET status = 'removed' WHERE id = ?").run(itemId);
     return { ok: true };
   });
 
@@ -99,8 +125,9 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
   // (see dedup.ts) — admin folds a duplicate lot into another by hand instead of
   // relying on the pixel-signature threshold, which can't reliably tell "same
   // item, different photo" from "different item" at the margin observed in
-  // practice. Source's bidders carry over (deduped, a claimant on both keeps
-  // one bid) and it's soft-removed rather than merging its own quantity twice.
+  // practice. Draft-only (see isEventDraft) — and since claiming requires an open
+  // event, a draft-time lot can never already have claimants, so merging never
+  // needs to carry bids over the way it used to.
   app.post<{ Params: { id: string }; Body: { intoId?: number } }>(
     '/items/:id/merge',
     { preHandler: requireAdmin(deps) },
@@ -130,20 +157,17 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
         reply.code(400).send({ error: 'items belong to different events' });
         return;
       }
+      if (!isEventDraft(deps, source.event_id)) {
+        reply.code(409).send({ error: 'event is not in draft' });
+        return;
+      }
       if (source.status !== 'pool' || target.status !== 'pool') {
         reply.code(409).send({ error: 'both lots must still be in the pool' });
         return;
       }
 
-      const mergeItems = deps.db.transaction(() => {
-        deps.db
-          .prepare('INSERT OR IGNORE INTO claims (item_id, telegram_id) SELECT ?, telegram_id FROM claims WHERE item_id = ?')
-          .run(targetId, sourceId);
-        deps.db.prepare('DELETE FROM claims WHERE item_id = ?').run(sourceId);
-        deps.db.prepare('UPDATE items SET quantity = quantity + ? WHERE id = ?').run(source.quantity, targetId);
-        deps.db.prepare("UPDATE items SET status = 'removed' WHERE id = ?").run(sourceId);
-      });
-      mergeItems();
+      deps.db.prepare('UPDATE items SET quantity = quantity + ? WHERE id = ?').run(source.quantity, targetId);
+      deps.db.prepare("UPDATE items SET status = 'removed' WHERE id = ?").run(sourceId);
 
       return { ok: true };
     }

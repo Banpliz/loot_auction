@@ -471,4 +471,31 @@ describe('POST /api/events/:id/screenshots', () => {
     });
     expect(res.status).toBe(400);
   });
+
+  it('rejects uploading once the event is no longer draft', async () => {
+    const createEventRes = await fetch(`${baseUrl}/api/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-telegram-init-data': adminInitData },
+      body: JSON.stringify({ title: 'Ивент' }),
+    });
+    const { id: eventId } = await createEventRes.json();
+    db.prepare("UPDATE events SET status = 'open' WHERE id = ?").run(eventId);
+
+    const imageBuffer = await sharp({
+      create: { width: 300, height: 120, channels: 3, background: { r: 209, g: 67, b: 78 } },
+    })
+      .png()
+      .toBuffer();
+    const form = new FormData();
+    form.append('rows', '1');
+    form.append('template', 'feast');
+    form.append('file', new Blob([imageBuffer], { type: 'image/png' }), 'reward.png');
+
+    const res = await fetch(`${baseUrl}/api/events/${eventId}/screenshots`, {
+      method: 'POST',
+      headers: { 'x-telegram-init-data': adminInitData },
+      body: form,
+    });
+    expect(res.status).toBe(409);
+  });
 });
