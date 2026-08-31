@@ -135,7 +135,12 @@ const MAX_HEIGHT_TO_WIDTH_RATIO = 1.2;
 // prompt's own description and the height ceiling above), so the same anchored-shrink trick
 // applies to width: clamp it to the icon's own (unclamped) height and keep the left edge
 // fixed, trimming any excess strictly off the right side where the bleed was reported.
-const MAX_WIDTH_TO_HEIGHT_RATIO = 1.0;
+//
+// Round 16: 1.0 was way too tight — a live test showed real icons (the diamond/hex frame
+// shapes are naturally a bit wider than tall) getting visibly zoomed in and cropped, losing
+// part of the actual picture. Cropping into the icon itself is a worse failure than a small
+// sliver of the neighbor showing, so loosen this to only catch genuinely extreme cases.
+const MAX_WIDTH_TO_HEIGHT_RATIO = 1.5;
 
 // baseUrl defaults to Anthropic's own endpoint, but can be pointed at a wire-compatible
 // proxy (same x-api-key header, same /v1/messages request/response shape, just a

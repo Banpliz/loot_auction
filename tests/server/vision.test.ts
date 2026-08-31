@@ -104,10 +104,10 @@ describe('extractInvasionLoot', () => {
     });
 
     const [result] = await extractInvasionLoot(fakeImage, 'test-key');
-    // Clamped w (before margin) is h * 1.0 = 0.1 (round 15), anchored at the same left edge
-    // (x unchanged) so the excess is trimmed strictly off the right — the reported bleed.
+    // Clamped w (before margin) is h * 1.5 = 0.15 (round 16: loosened from 1.0, which cut
+    // into real icons), anchored at the same left edge so the excess trims off the right.
     expect(result.w).toBeLessThan(0.3);
-    expect(result.x).toBeCloseTo(0.2 - 0.1 * 0.03); // left edge barely moves (small side margin)
+    expect(result.x).toBeCloseTo(0.2 - 0.15 * 0.03); // left edge barely moves (small side margin)
   });
 
   it('clamps the margin expansion so a box near the image edge never exceeds 0..1', async () => {
