@@ -153,8 +153,8 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
     const itemId = Number(request.params.id);
     const userId = request.telegramUser!.telegramId;
 
-    const item = deps.db.prepare('SELECT status, event_id, quantity FROM items WHERE id = ?').get(itemId) as
-      | { status: string; event_id: number; quantity: number }
+    const item = deps.db.prepare('SELECT status, event_id FROM items WHERE id = ?').get(itemId) as
+      | { status: string; event_id: number }
       | undefined;
     if (!item || item.status !== 'pool') {
       reply.code(409).send({ error: 'item is not claimable' });
@@ -171,13 +171,6 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
     }
 
     deps.db.prepare('INSERT OR IGNORE INTO claims (item_id, telegram_id) VALUES (?, ?)').run(itemId, userId);
-
-    // Mark item as auctioned if all units are now claimed
-    const claimCount = (deps.db.prepare('SELECT COUNT(DISTINCT telegram_id) as count FROM claims WHERE item_id = ?').get(itemId) as { count: number }).count;
-    if (claimCount >= item.quantity) {
-      deps.db.prepare("UPDATE items SET status = 'auctioned', auctioned_at = datetime('now') WHERE id = ?").run(itemId);
-    }
-
     return { ok: true };
   });
 
@@ -185,22 +178,13 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
     const itemId = Number(request.params.id);
     const userId = request.telegramUser!.telegramId;
 
-    const item = deps.db.prepare('SELECT event_id, quantity FROM items WHERE id = ?').get(itemId) as { event_id: number; quantity: number } | undefined;
+    const item = deps.db.prepare('SELECT event_id FROM items WHERE id = ?').get(itemId) as { event_id: number } | undefined;
     if (item && isPastDeadline(deps, item.event_id)) {
       reply.code(409).send({ error: 'bidding has ended' });
       return;
     }
 
     deps.db.prepare('DELETE FROM claims WHERE item_id = ? AND telegram_id = ?').run(itemId, userId);
-
-    // If item was auctioned but now has fewer claims than quantity, mark it back as pool
-    if (item) {
-      const claimCount = (deps.db.prepare('SELECT COUNT(DISTINCT telegram_id) as count FROM claims WHERE item_id = ?').get(itemId) as { count: number }).count;
-      if (claimCount < item.quantity) {
-        deps.db.prepare("UPDATE items SET status = 'pool' WHERE id = ? AND status = 'auctioned'").run(itemId);
-      }
-    }
-
     return { ok: true };
   });
 }
