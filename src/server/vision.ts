@@ -362,18 +362,25 @@ export async function readQuantities(
     throw new Error('Anthropic API response did not include the expected tool_use block');
   }
 
+  // Strict about the INDEX, forgiving about the QUANTITY. A bad or repeated index is a real
+  // alignment failure (Map.set would silently overwrite, misassigning another icon's number),
+  // so it throws. An unreadable quantity is only a readability problem — the prompt above
+  // already tells the model to answer 1 when it can't read the badge, so a missing/invalid
+  // one gets that same default instead of dropping the entry, which would make the index look
+  // "missing" below and 502 the entire multi-screenshot upload over one blurry badge (same
+  // philosophy as round 19's per-item skip in extractInvasionLoot).
   const byIndex = new Map<number, number>();
   for (const raw of toolUse.input.items) {
     const item = raw as { index?: unknown; quantity?: unknown };
-    if (
-      typeof item.index === 'number' &&
-      Number.isInteger(item.index) &&
-      typeof item.quantity === 'number' &&
-      Number.isInteger(item.quantity) &&
-      item.quantity >= 1
-    ) {
-      byIndex.set(item.index, item.quantity);
+    if (typeof item.index !== 'number' || !Number.isInteger(item.index)) {
+      continue;
     }
+    if (byIndex.has(item.index)) {
+      throw new Error(`readQuantities: duplicate index ${item.index}`);
+    }
+    const hasValidQuantity =
+      typeof item.quantity === 'number' && Number.isInteger(item.quantity) && item.quantity >= 1;
+    byIndex.set(item.index, hasValidQuantity ? (item.quantity as number) : 1);
   }
 
   // Missing-index check runs BEFORE the size check: it gives a precise "index N missing"

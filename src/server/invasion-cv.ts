@@ -29,6 +29,17 @@ const MIN_PANEL_HEIGHT_RATIO = 0.25;
 // real icon frame is a meaningful fraction of the image, never a handful of pixels.
 const MIN_FRAME_AREA_RATIO = 0.0008;
 
+// Icon frames are roughly square. Anything egregiously off square is two touching frames
+// flood-filled into one component (or other noise), not a real icon.
+//
+// The review that asked for this guard suggested 1.3, but that is too tight to ship: a
+// 30x40 frame (ratio 1.33) is a shape the existing detection tests already treat as one
+// valid icon, and vision.ts's own geometry constants allow an icon up to ~1.2-1.3x taller
+// than wide — a 1.3 ceiling would start discarding real single icons, trading this bug for
+// a worse one. The target of the guard is a MERGED PAIR, which is ~2x off square, so 1.5
+// catches every case the finding is about with real headroom above plausible icon shapes.
+const MAX_FRAME_ASPECT_RATIO = 1.5;
+
 type RawPixels = { data: Buffer; width: number; height: number; channels: number };
 
 function colorDistance(a: readonly [number, number, number], b: readonly [number, number, number]): number {
@@ -119,13 +130,11 @@ function findFrames(pixels: RawPixels, panelTop: number, panelBottom: number): D
 
       const stack = [idx];
       visited[idx] = 1;
-      let pixelCount = 0;
       const colorCounts: Record<RarityColor, number> = { blue: 0, purple: 0, red: 0 };
       let minX = x, maxX = x, minY = y, maxY = y;
 
       while (stack.length > 0) {
         const current = stack.pop()!;
-        pixelCount++;
         const cx = current % width;
         const cy = Math.floor(current / width);
         colorCounts[rarityLabels[current]!]++;
@@ -144,7 +153,20 @@ function findFrames(pixels: RawPixels, panelTop: number, panelBottom: number): D
         }
       }
 
-      if (pixelCount < minArea) continue;
+      // Measured on the component's FOOTPRINT, not its matched-pixel count: a real rarity
+      // frame is a hollow colored ring, so its matched pixels scale with the ring's
+      // perimeter (linear in icon size) while minArea scales with image area (quadratic in
+      // resolution) — at real screenshot resolutions a genuine 3-6px ring falls under
+      // minArea and got thrown away as noise. Its bounding box doesn't.
+      const bboxWidth = maxX - minX + 1;
+      const bboxHeight = maxY - minY + 1;
+      if (bboxWidth * bboxHeight < minArea) continue;
+
+      // Icons are roughly square. A component far off square is two adjacent same-rarity
+      // frames that the flood fill merged into one (connectivity only asks "is this pixel
+      // any rarity color", not "is this the same icon"), or some other non-icon blob —
+      // either way it's not one real frame, so drop just this component and keep going.
+      if (bboxWidth > bboxHeight * MAX_FRAME_ASPECT_RATIO || bboxHeight > bboxWidth * MAX_FRAME_ASPECT_RATIO) continue;
 
       let rarity: RarityColor = 'blue';
       let bestCount = -1;
@@ -187,6 +209,23 @@ export async function detectInvasionFrames(imageBuffer: Buffer): Promise<Detecte
 // Risks).
 const BADGE_WIDTH_RATIO = 0.4;
 const BADGE_HEIGHT_RATIO = 0.3;
+
+// The spec calls for small, symmetric padding around each detected frame before the
+// final crop the admin sees, matching the general look of icons cropped by the Vision
+// fallback path (which already applies margin). This must NEVER be applied to the frame
+// passed into cropBadge() — that function's ratios are calibrated against the frame's
+// own tight bounding box, and padding it first would shift the badge crop.
+const COSMETIC_MARGIN_RATIO = 0.06;
+
+export function withCosmeticMargin(frame: DetectedFrame): DetectedFrame {
+  const marginX = frame.w * COSMETIC_MARGIN_RATIO;
+  const marginY = frame.h * COSMETIC_MARGIN_RATIO;
+  const x = Math.max(0, frame.x - marginX);
+  const y = Math.max(0, frame.y - marginY);
+  const w = Math.min(1 - x, frame.w + 2 * marginX);
+  const h = Math.min(1 - y, frame.h + 2 * marginY);
+  return { ...frame, x, y, w, h };
+}
 
 export async function cropBadge(imageBuffer: Buffer, frame: DetectedFrame): Promise<Buffer> {
   const { width, height } = await sharp(imageBuffer).metadata();

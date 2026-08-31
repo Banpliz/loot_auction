@@ -10,7 +10,7 @@ import { computeIconSignature, groupBySignature, isSameIcon, isGenericChestIcon,
 import { findInLibrary } from '../lot-library';
 import { isEventDraft } from './items';
 import { extractInvasionLoot, readQuantities, type VisionLotItem } from '../vision';
-import { detectInvasionFrames, cropBadge } from '../invasion-cv';
+import { detectInvasionFrames, cropBadge, withCosmeticMargin } from '../invasion-cv';
 
 interface LotCandidate {
   screenshotId: number;
@@ -148,7 +148,10 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
             if (frames) {
               const badgeCrops = await Promise.all(frames.map((frame) => cropBadge(fileBuffers[f], frame)));
               const quantities = await readQuantities(badgeCrops, deps.anthropicApiKey!, deps.anthropicBaseUrl);
-              visionItems = frames.map((frame, i) => ({ ...frame, quantity: quantities[i] }));
+              // cropBadge above deliberately gets the raw, unpadded frame (its ratios are
+              // calibrated against the tight bounding box); only the final icon crop the
+              // admin sees gets the cosmetic margin.
+              visionItems = frames.map((frame, i) => ({ ...withCosmeticMargin(frame), quantity: quantities[i] }));
             } else {
               visionItems = await extractInvasionLoot(fileBuffers[f], deps.anthropicApiKey!, deps.anthropicBaseUrl);
             }

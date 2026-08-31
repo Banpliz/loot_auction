@@ -38,6 +38,10 @@ describe('POST /api/events/:id/screenshots', () => {
     // itself) — tests that care about specific vision output override with
     // mockResolvedValueOnce/mockRejectedValueOnce before making their request.
     vi.mocked(extractInvasionLoot).mockResolvedValue([{ x: 0.1, y: 0.1, w: 0.3, h: 0.3, rarity: 'purple', quantity: 1 }]);
+    // No global clearMocks in vitest.config.ts, so without this the call count leaks
+    // between tests — "was readQuantities called on this path?" assertions would be
+    // measuring every earlier test in the file instead of the one making them.
+    vi.mocked(readQuantities).mockReset();
   });
 
   afterEach(async () => {
@@ -645,6 +649,134 @@ describe('POST /api/events/:id/screenshots', () => {
     expect(row.quantity).toBe(4);
     expect(extractInvasionLoot).not.toHaveBeenCalled();
     expect(readQuantities).toHaveBeenCalledTimes(1);
+  });
+
+  it('correctly pairs multiple detected frames with their respective quantities, in order', async () => {
+    const createEventRes = await fetch(`${baseUrl}/api/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-telegram-init-data': adminInitData },
+      body: JSON.stringify({ title: 'Ивент CV multi' }),
+    });
+    const { id: eventId } = await createEventRes.json();
+
+    const panel = await sharp({ create: { width: 400, height: 240, channels: 3, background: { r: 237, g: 224, b: 196 } } })
+      .png()
+      .toBuffer();
+    const blueFrame = await sharp({ create: { width: 50, height: 50, channels: 3, background: { r: 74, g: 144, b: 217 } } })
+      .png()
+      .toBuffer();
+    const purpleFrame = await sharp({ create: { width: 50, height: 50, channels: 3, background: { r: 156, g: 74, b: 201 } } })
+      .png()
+      .toBuffer();
+    const redFrame = await sharp({ create: { width: 50, height: 50, channels: 3, background: { r: 209, g: 67, b: 78 } } })
+      .png()
+      .toBuffer();
+    const imageBuffer = await sharp({ create: { width: 400, height: 300, channels: 3, background: { r: 10, g: 10, b: 15 } } })
+      .composite([
+        { input: panel, left: 0, top: 30 },
+        { input: blueFrame, left: 50, top: 100 },
+        { input: purpleFrame, left: 150, top: 100 },
+        { input: redFrame, left: 250, top: 100 },
+      ])
+      .png()
+      .toBuffer();
+
+    // detectInvasionFrames emits components in raster scan order (top-to-bottom,
+    // left-to-right), so these three same-row frames should come out left-to-right:
+    // blue, purple, red. readQuantities is mocked to return distinct values so a
+    // zip/ordering bug would produce a visibly wrong pairing, not just a coincidence.
+    vi.mocked(readQuantities).mockResolvedValueOnce([2, 9, 4]);
+
+    const form = new FormData();
+    form.append('template', 'invasion');
+    form.append('file', new Blob([imageBuffer], { type: 'image/png' }), 'reward.png');
+
+    const res = await fetch(`${baseUrl}/api/events/${eventId}/screenshots`, {
+      method: 'POST',
+      headers: { 'x-telegram-init-data': adminInitData },
+      body: form,
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.itemIds).toHaveLength(3);
+
+    const rows = db
+      .prepare('SELECT color, quantity FROM items WHERE id IN (?, ?, ?)')
+      .all(...body.itemIds) as { color: string; quantity: number }[];
+    const byColor = Object.fromEntries(rows.map((r) => [r.color, r.quantity]));
+    expect(byColor.blue).toBe(2);
+    expect(byColor.purple).toBe(9);
+    expect(byColor.red).toBe(4);
+    expect(extractInvasionLoot).not.toHaveBeenCalled();
+  });
+
+  it('does not call readQuantities when falling back to the full-image Vision path', async () => {
+    const createEventRes = await fetch(`${baseUrl}/api/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-telegram-init-data': adminInitData },
+      body: JSON.stringify({ title: 'Ивент fallback' }),
+    });
+    const { id: eventId } = await createEventRes.json();
+
+    // Solid black, no panel at all — detectInvasionFrames must return null here.
+    const imageBuffer = await sharp({ create: { width: 200, height: 200, channels: 3, background: { r: 0, g: 0, b: 0 } } })
+      .png()
+      .toBuffer();
+
+    vi.mocked(extractInvasionLoot).mockResolvedValueOnce([
+      { x: 0.1, y: 0.1, w: 0.3, h: 0.3, rarity: 'red', quantity: 1 },
+    ]);
+
+    const form = new FormData();
+    form.append('template', 'invasion');
+    form.append('file', new Blob([imageBuffer], { type: 'image/png' }), 'reward.png');
+
+    const res = await fetch(`${baseUrl}/api/events/${eventId}/screenshots`, {
+      method: 'POST',
+      headers: { 'x-telegram-init-data': adminInitData },
+      body: form,
+    });
+    expect(res.status).toBe(200);
+    expect(readQuantities).not.toHaveBeenCalled();
+    expect(extractInvasionLoot).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces a 502 when readQuantities fails on the code-side CV path', async () => {
+    const createEventRes = await fetch(`${baseUrl}/api/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-telegram-init-data': adminInitData },
+      body: JSON.stringify({ title: 'Ивент CV ошибка' }),
+    });
+    const { id: eventId } = await createEventRes.json();
+
+    const panel = await sharp({ create: { width: 300, height: 240, channels: 3, background: { r: 237, g: 224, b: 196 } } })
+      .png()
+      .toBuffer();
+    const frame = await sharp({ create: { width: 60, height: 60, channels: 3, background: { r: 74, g: 144, b: 217 } } })
+      .png()
+      .toBuffer();
+    const imageBuffer = await sharp({ create: { width: 300, height: 300, channels: 3, background: { r: 10, g: 10, b: 15 } } })
+      .composite([
+        { input: panel, left: 0, top: 30 },
+        { input: frame, left: 150, top: 100 },
+      ])
+      .png()
+      .toBuffer();
+
+    vi.mocked(readQuantities).mockRejectedValueOnce(new Error('Anthropic API request failed (500): boom'));
+
+    const form = new FormData();
+    form.append('template', 'invasion');
+    form.append('file', new Blob([imageBuffer], { type: 'image/png' }), 'reward.png');
+
+    const res = await fetch(`${baseUrl}/api/events/${eventId}/screenshots`, {
+      method: 'POST',
+      headers: { 'x-telegram-init-data': adminInitData },
+      body: form,
+    });
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.error).toContain('Anthropic API request failed');
   });
 
   it('rejects an invasion upload with 400 when ANTHROPIC_API_KEY is not configured', async () => {

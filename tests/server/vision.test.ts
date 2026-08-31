@@ -307,6 +307,46 @@ describe('readQuantities', () => {
     expect(imageBlocks[0].source.data).toBe(crops[0].toString('base64'));
   });
 
+  it('throws when the response has a genuine duplicate index (not just an extra one)', async () => {
+    mockFetchOnce({
+      ok: true,
+      json: async () => ({
+        content: [{
+          type: 'tool_use',
+          input: {
+            items: [
+              { index: 0, quantity: 3 },
+              { index: 1, quantity: 5 },
+              { index: 2, quantity: 7 },
+              { index: 1, quantity: 99 }, // index 1 reported twice — must not silently overwrite
+            ],
+          },
+        }],
+      }),
+    });
+    await expect(readQuantities(crops, 'test-key')).rejects.toThrow(/duplicate index 1/);
+  });
+
+  it('defaults an unreadable badge to quantity 1 without failing the whole batch', async () => {
+    mockFetchOnce({
+      ok: true,
+      json: async () => ({
+        content: [{
+          type: 'tool_use',
+          input: {
+            items: [
+              { index: 0, quantity: 3 },
+              { index: 1, quantity: 'unreadable' }, // model couldn't read this one clearly
+              { index: 2, quantity: 5 },
+            ],
+          },
+        }],
+      }),
+    });
+    const result = await readQuantities(crops, 'test-key');
+    expect(result).toEqual([3, 1, 5]); // index 1 defaults to 1, indices 0 and 2 unaffected
+  });
+
   it('throws when the response is missing an index', async () => {
     mockFetchOnce({
       ok: true,
