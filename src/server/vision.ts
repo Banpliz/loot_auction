@@ -274,6 +274,131 @@ export async function extractInvasionLoot(
   return items;
 }
 
+const QUANTITY_PROMPT = `Каждое изображение выше — маленький кроп бейджика с числом
+(количество предмета) в мобильной игре, пронумерованный по порядку начиная с 0
+("Изображение 0", "Изображение 1", ...). Для КАЖДОГО изображения верни ровно одну запись:
+index (номер изображения, как подписано выше) и quantity — число, которое там написано.
+Если число нечитаемо или бейджика не видно на конкретном изображении — верни quantity: 1
+для этого index, но всё равно включи запись. Не пропускай ни один index и не добавляй
+лишних.`;
+
+// One batched call: every badge crop goes in as its own small image, numbered in the
+// prompt text so the model can report an explicit index per result. The response is
+// matched to input crops BY THAT INDEX, never by array position — a batched multi-image
+// request desyncing image N from output N is a real failure mode (see Global Constraints
+// in the plan this shipped from), so any response whose indices don't exactly cover
+// 0..badgeCrops.length-1 is treated as a failed call, not silently reordered or truncated.
+export async function readQuantities(
+  badgeCrops: Buffer[],
+  apiKey: string,
+  baseUrl: string = DEFAULT_BASE_URL
+): Promise<number[]> {
+  if (!apiKey) {
+    throw new Error('ANTHROPIC_API_KEY is not configured');
+  }
+  if (badgeCrops.length === 0) {
+    return [];
+  }
+
+  const content: Record<string, unknown>[] = [];
+  badgeCrops.forEach((crop, i) => {
+    content.push({ type: 'text', text: `Изображение ${i}:` });
+    content.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: crop.toString('base64') } });
+  });
+  content.push({ type: 'text', text: QUANTITY_PROMPT });
+
+  const res = await fetch(`${baseUrl}/v1/messages`, {
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': ANTHROPIC_VERSION,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      max_tokens: 2000,
+      thinking: { type: 'disabled' },
+      tools: [
+        {
+          name: 'read_quantities',
+          description: 'Records the quantity number read off each small badge image.',
+          input_schema: {
+            type: 'object',
+            properties: {
+              items: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    index: { type: 'integer', minimum: 0 },
+                    quantity: { type: 'integer', minimum: 1 },
+                  },
+                  required: ['index', 'quantity'],
+                },
+              },
+            },
+            required: ['items'],
+          },
+        },
+      ],
+      tool_choice: { type: 'tool', name: 'read_quantities' },
+      messages: [{ role: 'user', content }],
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Anthropic API request failed (${res.status}): ${body.slice(0, 300)}`);
+  }
+
+  const data = (await res.json()) as { content?: { type: string; input?: unknown }[]; stop_reason?: string };
+  if (data.stop_reason === 'max_tokens') {
+    throw new Error('Anthropic API response was truncated (max_tokens)');
+  }
+  const toolUse = data.content?.find((block) => block.type === 'tool_use') as
+    | { type: 'tool_use'; input?: { items?: unknown[] } }
+    | undefined;
+  if (!toolUse || !Array.isArray(toolUse.input?.items)) {
+    throw new Error('Anthropic API response did not include the expected tool_use block');
+  }
+
+  const byIndex = new Map<number, number>();
+  for (const raw of toolUse.input.items) {
+    const item = raw as { index?: unknown; quantity?: unknown };
+    if (
+      typeof item.index === 'number' &&
+      Number.isInteger(item.index) &&
+      typeof item.quantity === 'number' &&
+      Number.isInteger(item.quantity) &&
+      item.quantity >= 1
+    ) {
+      byIndex.set(item.index, item.quantity);
+    }
+  }
+
+  // Missing-index check runs BEFORE the size check: it gives a precise "index N missing"
+  // message for the common case (the model just dropped one). The size check afterward
+  // catches what the missing-index loop can't — every 0..N-1 present, but padded with an
+  // extra/out-of-range index too, which is just as untrustworthy as a missing one, so it
+  // isn't given a free pass by inspecting the count.
+  const quantities: number[] = [];
+  for (let i = 0; i < badgeCrops.length; i++) {
+    const quantity = byIndex.get(i);
+    if (quantity === undefined) {
+      throw new Error(`readQuantities: response missing index ${i}`);
+    }
+    quantities.push(quantity);
+  }
+
+  if (byIndex.size !== badgeCrops.length) {
+    throw new Error(
+      `readQuantities: response had ${byIndex.size} distinct indices, expected exactly ${badgeCrops.length}`
+    );
+  }
+
+  return quantities;
+}
+
 async function hasVisualContent(imageBuffer: Buffer, box: { x: number; y: number; w: number; h: number }): Promise<boolean> {
   const { width, height } = await sharp(imageBuffer).metadata();
   if (!width || !height) return true; // can't check — don't block on a metadata read failure

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest';
 import sharp from 'sharp';
-import { extractInvasionLoot } from '../../src/server/vision';
+import { extractInvasionLoot, readQuantities } from '../../src/server/vision';
 
 describe('extractInvasionLoot', () => {
   // Round 21 added a real image-content check (vision.ts's hasVisualContent), so these
@@ -254,5 +254,110 @@ describe('extractInvasionLoot', () => {
     const [result] = await extractInvasionLoot(fakeImage, 'test-key');
     expect(result.x + result.w).toBeLessThanOrEqual(1);
     expect(result.y + result.h).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('readQuantities', () => {
+  const crops = [Buffer.from('crop-0'), Buffer.from('crop-1'), Buffer.from('crop-2')];
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function mockFetchOnce(response: { ok: boolean; status?: number; json?: () => Promise<unknown>; text?: () => Promise<string> }) {
+    const fetchMock = vi.fn().mockResolvedValue(response);
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  it('returns [] without calling fetch when there are no crops', async () => {
+    const fetchMock = mockFetchOnce({ ok: true, json: async () => ({}) });
+    const result = await readQuantities([], 'test-key');
+    expect(result).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('throws without calling fetch when apiKey is empty', async () => {
+    const fetchMock = mockFetchOnce({ ok: true, json: async () => ({}) });
+    await expect(readQuantities(crops, '')).rejects.toThrow('ANTHROPIC_API_KEY is not configured');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('matches results to input crops by index, not by response order', async () => {
+    const fetchMock = mockFetchOnce({
+      ok: true,
+      json: async () => ({
+        content: [{
+          type: 'tool_use',
+          input: { items: [{ index: 2, quantity: 7 }, { index: 0, quantity: 3 }, { index: 1, quantity: 5 }] },
+        }],
+      }),
+    });
+    const result = await readQuantities(crops, 'test-key');
+    expect(result).toEqual([3, 5, 7]); // input order, not response order
+
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toBe('https://api.anthropic.com/v1/messages');
+    const body = JSON.parse(options.body);
+    expect(body.model).toBe('claude-sonnet-5');
+    expect(body.tool_choice).toEqual({ type: 'tool', name: 'read_quantities' });
+    expect(body.thinking).toEqual({ type: 'disabled' });
+    const imageBlocks = body.messages[0].content.filter((b: any) => b.type === 'image');
+    expect(imageBlocks).toHaveLength(3);
+    expect(imageBlocks[0].source.data).toBe(crops[0].toString('base64'));
+  });
+
+  it('throws when the response is missing an index', async () => {
+    mockFetchOnce({
+      ok: true,
+      json: async () => ({
+        content: [{ type: 'tool_use', input: { items: [{ index: 0, quantity: 3 }, { index: 1, quantity: 5 }] } }],
+      }),
+    });
+    await expect(readQuantities(crops, 'test-key')).rejects.toThrow(/index 2/);
+  });
+
+  it('throws when the response has an extra out-of-range index alongside every valid one', async () => {
+    // All 3 valid indices (0, 1, 2) are present — nothing is "missing" — but a 4th, bogus
+    // entry (index 5) makes the response untrustworthy anyway: something desynced.
+    mockFetchOnce({
+      ok: true,
+      json: async () => ({
+        content: [{
+          type: 'tool_use',
+          input: {
+            items: [
+              { index: 0, quantity: 3 },
+              { index: 1, quantity: 5 },
+              { index: 2, quantity: 1 },
+              { index: 5, quantity: 9 },
+            ],
+          },
+        }],
+      }),
+    });
+    await expect(readQuantities(crops, 'test-key')).rejects.toThrow(/distinct indices/);
+  });
+
+  it('calls a custom baseUrl when one is passed', async () => {
+    const fetchMock = mockFetchOnce({
+      ok: true,
+      json: async () => ({
+        content: [{ type: 'tool_use', input: { items: [{ index: 0, quantity: 1 }] } }],
+      }),
+    });
+    await readQuantities([crops[0]], 'test-key', 'https://router.example');
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe('https://router.example/v1/messages');
+  });
+
+  it('throws with the status code when the API responds non-2xx', async () => {
+    mockFetchOnce({ ok: false, status: 500, text: async () => 'server error' });
+    await expect(readQuantities(crops, 'test-key')).rejects.toThrow(/500/);
+  });
+
+  it('throws when the response has no tool_use block', async () => {
+    mockFetchOnce({ ok: true, json: async () => ({ content: [{ type: 'text', text: 'oops' }] }) });
+    await expect(readQuantities(crops, 'test-key')).rejects.toThrow('tool_use');
   });
 });
