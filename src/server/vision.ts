@@ -1,6 +1,12 @@
 const MODEL = 'claude-sonnet-5';
 const API_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
+// Generous headroom: Sonnet 5 runs adaptive thinking by default when `thinking` is
+// omitted, and its tokenizer is denser than older models — a tight budget here risks
+// truncating mid-array on a screenshot with many icons, an error no test (they all stub
+// fetch) can catch. Paying for headroom that goes unused costs nothing extra; only
+// tokens actually generated are billed.
+const MAX_TOKENS = 8000;
 
 export interface VisionLotItem {
   x: number;
@@ -36,7 +42,7 @@ export async function extractInvasionLoot(imageBuffer: Buffer, apiKey: string): 
     },
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: 1024,
+      max_tokens: MAX_TOKENS,
       tools: [
         {
           name: 'extract_trophy_loot',
@@ -82,7 +88,10 @@ export async function extractInvasionLoot(imageBuffer: Buffer, apiKey: string): 
     throw new Error(`Anthropic API request failed (${res.status}): ${body.slice(0, 300)}`);
   }
 
-  const data = (await res.json()) as { content?: { type: string; input?: unknown }[] };
+  const data = (await res.json()) as { content?: { type: string; input?: unknown }[]; stop_reason?: string };
+  if (data.stop_reason === 'max_tokens') {
+    throw new Error('Anthropic API response was truncated (max_tokens) — the screenshot likely has too many icons for one call');
+  }
   const toolUse = data.content?.find((block) => block.type === 'tool_use') as
     | { type: 'tool_use'; input?: { items?: unknown[] } }
     | undefined;
@@ -96,14 +105,21 @@ export async function extractInvasionLoot(imageBuffer: Buffer, apiKey: string): 
 function validateItem(raw: unknown, index: number): VisionLotItem {
   const item = raw as Partial<VisionLotItem>;
   const isFraction = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1;
+  const isPositiveInt = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 1;
   if (!isFraction(item.x) || !isFraction(item.y) || !isFraction(item.w) || !isFraction(item.h)) {
     throw new Error(`item ${index}: x/y/w/h must be numbers between 0 and 1`);
+  }
+  // A box right at the image edge (e.g. x=1) can produce a crop region that extends past
+  // the source image — cropBox doesn't fully guard against this and would throw a raw
+  // sharp error instead of a clean, catchable validation message.
+  if (item.x + item.w > 1 || item.y + item.h > 1) {
+    throw new Error(`item ${index}: box extends past the image edge (x+w or y+h > 1)`);
   }
   if (item.rarity !== 'blue' && item.rarity !== 'purple' && item.rarity !== 'red') {
     throw new Error(`item ${index}: rarity must be blue, purple, or red`);
   }
-  if (!Number.isInteger(item.quantity) || (item.quantity as number) < 1) {
+  if (!isPositiveInt(item.quantity)) {
     throw new Error(`item ${index}: quantity must be a positive integer`);
   }
-  return { x: item.x, y: item.y, w: item.w, h: item.h, rarity: item.rarity, quantity: item.quantity } as VisionLotItem;
+  return { x: item.x, y: item.y, w: item.w, h: item.h, rarity: item.rarity, quantity: item.quantity };
 }

@@ -95,4 +95,25 @@ describe('extractInvasionLoot', () => {
     });
     await expect(extractInvasionLoot(fakeImage, 'test-key')).rejects.toThrow('x/y/w/h');
   });
+
+  it('throws when the response was truncated (stop_reason max_tokens)', async () => {
+    mockFetchOnce({
+      ok: true,
+      json: async () => ({
+        stop_reason: 'max_tokens',
+        content: [{ type: 'tool_use', input: { items: [{ x: 0.1, y: 0.1, w: 0.1, h: 0.1, rarity: 'blue', quantity: 1 }] } }],
+      }),
+    });
+    await expect(extractInvasionLoot(fakeImage, 'test-key')).rejects.toThrow('truncated');
+  });
+
+  it('throws when a box extends past the image edge (x+w > 1)', async () => {
+    mockFetchOnce({
+      ok: true,
+      json: async () => ({
+        content: [{ type: 'tool_use', input: { items: [{ x: 0.8, y: 0.1, w: 0.5, h: 0.1, rarity: 'blue', quantity: 1 }] } }],
+      }),
+    });
+    await expect(extractInvasionLoot(fakeImage, 'test-key')).rejects.toThrow('edge');
+  });
 });

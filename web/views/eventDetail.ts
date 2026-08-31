@@ -27,9 +27,11 @@ const EVENT_STATUS_LABEL: Record<string, string> = { draft: 'Черновик', 
 // through the ngrok tunnel that's long enough to drop mid-transfer (the actual cause of
 // the upload 503s: the connection breaks before the file even fully arrives, independent
 // of how long the server takes to process it). Re-encoding as a smaller JPEG cuts the
-// transfer time proportionally; extraction reads proportional crop boxes, so shrinking
-// doesn't affect accuracy. This alone can't fix a genuinely bad connection — see the
-// retry loop below for that.
+// transfer time proportionally. For feast, extraction reads proportional crop boxes, so
+// shrinking doesn't affect accuracy — but invasion now reads a small ×N badge off each
+// icon, where over-shrinking can make the digit illegible, so its upload uses a larger
+// size/quality (see the submit handler below). This alone can't fix a genuinely bad
+// connection — see the retry loop below for that.
 async function compressForUpload(file: File, maxWidth = 720, quality = 0.7): Promise<Blob> {
   const bitmap = await createImageBitmap(file);
   const scale = Math.min(1, maxWidth / bitmap.width);
@@ -76,8 +78,9 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
         автоматически — впиши вручную только если по иконке не понятно, что за лот
         (например, у сундуков одного вида, но разного уровня — учти, что такие лоты тоже
         объединятся в один, раз иконка совпадает, так что кол-во и пометку для них стоит
-        проверить особенно внимательно). Для вторжения строки указывать не нужно —
-        модель сама разберёт скриншот. Цену не показываем — участники и так видят её в
+        проверить особенно внимательно). Для вторжения грузи скриншот экрана «Трофеи»
+        (не старый экран аукциона) — строки указывать не нужно, модель сама разберёт
+        скриншот. Цену не показываем — участники и так видят её в
         игре. Редактировать лоты можно, пока не нажата «Начать аукцион» — после старта
         список блокируется.
       </p>
@@ -86,7 +89,7 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
           <input id="rows-input" name="rows" type="number" min="1" max="50" placeholder="Строк на каждом скрине" required />
           <select id="template-select" name="template" required>
             <option value="feast">Пир победы</option>
-            <option value="invasion">Аукцион вторжения</option>
+            <option value="invasion">Вторжение (скрин «Трофеи»)</option>
           </select>
         </div>
         <input name="file" type="file" accept="image/*" multiple required />
@@ -329,7 +332,11 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
           try {
             statusEl.textContent = `Сжимаю ${i + 1} из ${files.length}${attemptLabel}…`;
             submitBtn.textContent = `Сжимаю ${i + 1} из ${files.length}…`;
-            const compressed = await compressForUpload(files[i]);
+            // Invasion needs a bigger, higher-quality image than feast — the model reads a
+            // small ×N badge off each icon, and feast's tighter default (tuned for
+            // grid-slice accuracy, not badge legibility) can make that digit illegible.
+            const compressed =
+              template === 'invasion' ? await compressForUpload(files[i], 1080, 0.85) : await compressForUpload(files[i]);
 
             statusEl.textContent = `Загружаю ${i + 1} из ${files.length}${attemptLabel}…`;
             submitBtn.textContent = `Загружаю ${i + 1} из ${files.length}…`;
