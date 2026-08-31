@@ -3,7 +3,7 @@ import { LAYOUT_TEMPLATES } from './layout-templates';
 
 export type RarityColor = 'blue' | 'purple' | 'red';
 
-const REFERENCE_COLORS: Record<RarityColor, [number, number, number]> = {
+export const REFERENCE_COLORS: Record<RarityColor, [number, number, number]> = {
   blue: [74, 144, 217],
   purple: [156, 74, 201],
   red: [209, 67, 78],
