@@ -37,9 +37,19 @@ describe('extractInvasionLoot', () => {
     });
 
     const result = await extractInvasionLoot(fakeImage, 'test-key');
-    // Expanded by the 8% margin applied post-validation (see MARGIN_RATIO in vision.ts):
-    // marginX/Y = 0.1 * 0.08 = 0.008, so x/y shrink by that and w/h grow by 2x that.
-    expect(result).toEqual([{ x: 0.092, y: 0.192, w: 0.116, h: 0.116, rarity: 'purple', quantity: 2 }]);
+    // Expanded by the asymmetric margin applied post-validation (see MARGIN_RATIO /
+    // TOP_MARGIN_RATIO in vision.ts): marginX = 0.1*0.08 = 0.008, marginTop = 0.1*0.03 =
+    // 0.003, marginBottom = 0.1*0.08 = 0.008. x shrinks by marginX, y shrinks by the
+    // smaller marginTop, w grows by 2*marginX, h grows by marginTop+marginBottom.
+    // toBeCloseTo for the floating-point fields — plain toEqual is exact-equality and
+    // flaky against binary floating-point rounding (e.g. 0.003 + 0.008 !== 0.011 exactly).
+    expect(result).toHaveLength(1);
+    expect(result[0].x).toBeCloseTo(0.092);
+    expect(result[0].y).toBeCloseTo(0.197);
+    expect(result[0].w).toBeCloseTo(0.116);
+    expect(result[0].h).toBeCloseTo(0.111);
+    expect(result[0].rarity).toBe('purple');
+    expect(result[0].quantity).toBe(2);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, options] = fetchMock.mock.calls[0];
