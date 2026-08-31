@@ -291,23 +291,26 @@ describe('events routes', () => {
     const screenshot = db
       .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
       .run(eventId, '/tmp/original.png');
+    // Seeded directly (status/quantity/claims all set by hand) rather than via
+    // POST /items/:id/claim — the claim endpoint's own quantity-decrement and
+    // status-flip-to-auctioned behavior belongs to Task 3, not this task. This test only
+    // verifies that GET /events/current's winners list reads from claims (this task's
+    // attachWinners rewrite), independent of whichever later task produces that state.
     const claimedItem = db
-      .prepare("INSERT INTO items (event_id, screenshot_id, name, image_path, status) VALUES (?, ?, 'Меч', 'items/a.png', 'pool')")
+      .prepare(
+        "INSERT INTO items (event_id, screenshot_id, name, image_path, status, quantity) VALUES (?, ?, 'Меч', 'items/a.png', 'auctioned', 0)"
+      )
       .run(eventId, screenshot.lastInsertRowid);
     const unclaimedItem = db
       .prepare("INSERT INTO items (event_id, screenshot_id, name, image_path, status) VALUES (?, ?, 'Щит', 'items/b.png', 'pool')")
       .run(eventId, screenshot.lastInsertRowid);
+    db.prepare('INSERT INTO claims (item_id, telegram_id) VALUES (?, 2)').run(claimedItem.lastInsertRowid);
 
     await app.inject({
       method: 'POST',
       url: `/api/events/${eventId}/start`,
       headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
       payload: { durationMinutes: 25 },
-    });
-    await app.inject({
-      method: 'POST',
-      url: `/api/items/${claimedItem.lastInsertRowid}/claim`,
-      headers: { 'x-telegram-init-data': memberInitData },
     });
 
     const poolRes = await app.inject({ method: 'GET', url: '/api/events/current', headers: { 'x-telegram-init-data': memberInitData } });
