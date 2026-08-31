@@ -857,6 +857,10 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
       const originalsDir = path.join(uploadsDir, 'originals');
       const itemsDir = path.join(uploadsDir, 'items');
       await fs.mkdir(originalsDir, { recursive: true });
+      // feast's sliceImageToCells creates itemsDir as a side effect, but invasion's path
+      // below calls cropBox directly on it without going through that helper — needs its
+      // own mkdir or the first cropBox write fails with ENOENT.
+      await fs.mkdir(itemsDir, { recursive: true });
 
       const userId = request.telegramUser!.telegramId;
       const insertScreenshot = deps.db.prepare(
