@@ -5,15 +5,17 @@ import type { AppDeps } from '../types';
 import { requireAdmin } from '../auth';
 import { sliceImageToCells, cropBox } from '../grid-slice';
 import { isTemplate, LAYOUT_TEMPLATES } from '../layout-templates';
-import { detectColor } from '../color-detect';
+import { detectColor, type RarityColor } from '../color-detect';
 import { computeIconSignature, groupBySignature, isSameIcon, isGenericChestIcon, type IconSignature } from '../dedup';
 import { findInLibrary } from '../lot-library';
 import { isEventDraft } from './items';
+import { extractInvasionLoot } from '../vision';
 
-interface SlicedRow {
+interface LotCandidate {
   screenshotId: number;
-  cellPath: string;
   imagePath: string;
+  color: RarityColor;
+  quantity: number;
 }
 
 export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
@@ -47,12 +49,18 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
         reply.code(400).send({ error: 'at least one file is required' });
         return;
       }
-      if (!Number.isInteger(rows) || rows! < 1 || rows! > 50) {
+      if (!isTemplate(template)) {
+        reply.code(400).send({ error: 'template must be feast or invasion' });
+        return;
+      }
+      // invasion's layout is read by a Claude vision call instead of a manual row count —
+      // see vision.ts — so rows is only required (and only used) for feast.
+      if (template === 'feast' && (!Number.isInteger(rows) || rows! < 1 || rows! > 50)) {
         reply.code(400).send({ error: 'rows must be a positive integer between 1 and 50' });
         return;
       }
-      if (!isTemplate(template)) {
-        reply.code(400).send({ error: 'template must be feast or invasion' });
+      if (template === 'invasion' && !deps.anthropicApiKey) {
+        reply.code(400).send({ error: 'ANTHROPIC_API_KEY is not configured for invasion screenshots' });
         return;
       }
 
@@ -60,6 +68,10 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
       const originalsDir = path.join(uploadsDir, 'originals');
       const itemsDir = path.join(uploadsDir, 'items');
       await fs.mkdir(originalsDir, { recursive: true });
+      // feast's sliceImageToCells creates itemsDir as a side effect, but invasion's path
+      // below calls cropBox directly on it without going through that helper — needs its
+      // own mkdir or the first cropBox write fails with ENOENT.
+      await fs.mkdir(itemsDir, { recursive: true });
 
       const userId = request.telegramUser!.telegramId;
       const insertScreenshot = deps.db.prepare(
@@ -69,15 +81,20 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
         "INSERT INTO items (event_id, screenshot_id, image_path, color, category, name, quantity, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pool')"
       );
 
-      const { iconBox } = LAYOUT_TEMPLATES[template];
-      const slicedRows: SlicedRow[] = [];
+      // Only feast still uses the fixed pixel-grid layout; invasion's icons/quantities
+      // come from extractInvasionLoot instead (see vision.ts) — variable row/icon count,
+      // quantity read off each icon's own badge rather than inferred by counting rows.
+      const feastLayout = template === 'feast' ? LAYOUT_TEMPLATES.feast! : undefined;
+      const candidates: LotCandidate[] = [];
 
       for (let f = 0; f < fileBuffers.length; f++) {
         const uploadStamp = Date.now();
         const originalPath = path.join(originalsDir, `${eventId}-${uploadStamp}-${f}.png`);
         await fs.writeFile(originalPath, fileBuffers[f]);
 
-        const screenshotId = insertScreenshot.run(eventId, originalPath, rows, template, userId)
+        // rows is meaningless for invasion — 0 is a placeholder, never read back (the
+        // column stays NOT NULL; not worth a migration for a value nothing uses).
+        const screenshotId = insertScreenshot.run(eventId, originalPath, feastLayout ? rows : 0, template, userId)
           .lastInsertRowid as number;
 
         // The prefix folds in uploadStamp, not just screenshotId, on purpose: `id` is a
@@ -92,39 +109,61 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
         // 2026-08-28: fresh event, brand-new screenshots, but the admin grid showed items
         // from an unrelated, already-deleted test event.
         const baseName = `ss${screenshotId}-${uploadStamp}`;
-        const cellPaths = await sliceImageToCells(
-          originalPath,
-          rows!,
-          1,
-          itemsDir,
-          baseName,
-          LAYOUT_TEMPLATES[template].contentTop,
-          LAYOUT_TEMPLATES[template].rowHeight
-        );
-        for (let i = 0; i < cellPaths.length; i++) {
-          const cellPath = cellPaths[i];
-          // The icon badge alone identifies the item, so it's what gets shown as the
-          // lot's image (and compared below to spot duplicate rows); the full row strip
-          // stays only as the source for color detection. Templates without a measured
-          // iconBox yet fall back to using the whole row for both.
-          const imagePath = iconBox
-            ? await cropBox(cellPath, iconBox, path.join(itemsDir, `${baseName}-${i}-icon.png`))
-            : cellPath;
-          slicedRows.push({ screenshotId, cellPath, imagePath });
+
+        if (feastLayout) {
+          const cellPaths = await sliceImageToCells(
+            originalPath,
+            rows!,
+            1,
+            itemsDir,
+            baseName,
+            feastLayout.contentTop,
+            feastLayout.rowHeight
+          );
+          for (let i = 0; i < cellPaths.length; i++) {
+            const cellPath = cellPaths[i];
+            // The icon badge alone identifies the item, so it's what gets shown as the
+            // lot's image (and compared below to spot duplicate rows); the full row strip
+            // stays only as the source for color detection.
+            const imagePath = feastLayout.iconBox
+              ? await cropBox(cellPath, feastLayout.iconBox, path.join(itemsDir, `${baseName}-${i}-icon.png`))
+              : cellPath;
+            let color: RarityColor = 'blue';
+            try {
+              color = await detectColor(cellPath, 'feast');
+            } catch (err) {
+              request.log.warn({ err }, 'color detection failed, defaulting to blue');
+            }
+            candidates.push({ screenshotId, imagePath, color, quantity: 1 });
+          }
+        } else {
+          let visionItems;
+          try {
+            visionItems = await extractInvasionLoot(fileBuffers[f], deps.anthropicApiKey!);
+          } catch (err) {
+            request.log.error({ err }, 'invasion vision extraction failed');
+            reply.code(502).send({ error: `Не удалось распознать скриншот: ${(err as Error).message}` });
+            return;
+          }
+          for (let i = 0; i < visionItems.length; i++) {
+            const item = visionItems[i];
+            const imagePath = await cropBox(originalPath, item, path.join(itemsDir, `${baseName}-${i}-icon.png`));
+            candidates.push({ screenshotId, imagePath, color: item.rarity, quantity: item.quantity });
+          }
         }
       }
 
-      // The same item often appears as several separate rows in the source screenshot
-      // (a common drop won by many people) — grouping identical-looking icons into one
-      // lot with a quantity, instead of one lot per row, is the whole point of this
-      // endpoint; see dedup.ts for how "identical-looking" is decided and its one known
-      // blind spot (two different items that share the exact same icon art, like a
-      // chest whose graphic doesn't change between tiers, still merge).
+      // The same item often appears more than once (a common drop, or split across two
+      // boss rows) — grouping identical-looking icons into one lot with a quantity,
+      // instead of one lot per icon, is the whole point of this endpoint; see dedup.ts
+      // for how "identical-looking" is decided and its one known blind spot (two
+      // different items that share the exact same icon art, like a chest whose graphic
+      // doesn't change between tiers, still merge).
       const withSignatures = await Promise.all(
-        slicedRows.map(async (row) => ({ signature: await computeIconSignature(row.imagePath), value: row }))
+        candidates.map(async (c) => ({ signature: await computeIconSignature(c.imagePath), value: c }))
       );
       const signatureByPath = new Map(withSignatures.map((s) => [s.value.imagePath, s.signature]));
-      const groups = groupBySignature<SlicedRow>(withSignatures as { signature: IconSignature; value: SlicedRow }[]);
+      const groups = groupBySignature<LotCandidate>(withSignatures as { signature: IconSignature; value: LotCandidate }[]);
 
       // Дубли бьют не только внутри одной загрузки, но и между отдельными
       // выгрузками скриншотов (тот же лот попал на два разных скрина) — поэтому
@@ -159,6 +198,7 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
       for (const group of groups) {
         const representative = group[0];
         const signature = signatureByPath.get(representative.imagePath)!;
+        const quantity = group.reduce((sum, c) => sum + c.quantity, 0);
 
         // The generic chest icon is excluded from cross-upload matching (see
         // isGenericChestIcon) — it looks identical across genuinely different
@@ -169,22 +209,13 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
           ? undefined
           : existingSignatures.find((es) => isSameIcon(es.signature, signature));
         if (existingMatch) {
-          bumpQuantity.run(group.length, existingMatch.item.id);
-          existingMatch.item.quantity += group.length;
+          bumpQuantity.run(quantity, existingMatch.item.id);
+          existingMatch.item.quantity += quantity;
           itemIds.push(existingMatch.item.id);
           continue;
         }
 
         const relPath = path.relative(uploadsDir, representative.imagePath).split(path.sep).join('/');
-
-        // Color detection is a plain pixel sample (no OCR, no network) — cheap enough
-        // to do inline instead of the background-job dance OCR used to need.
-        let color: 'blue' | 'purple' | 'red' = 'blue';
-        try {
-          color = await detectColor(representative.cellPath, template);
-        } catch (err) {
-          request.log.warn({ err }, 'color detection failed, defaulting to blue');
-        }
 
         // A generic chest icon can't be trusted to identify what's actually inside it
         // (see isGenericChestIcon above), so it's excluded from library lookup the same
@@ -193,10 +224,18 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
         const known = isGenericChestIcon(signature) ? undefined : findInLibrary(deps.db, signature);
 
         const itemId = insertItem
-          .run(eventId, representative.screenshotId, relPath, color, known?.category ?? 'item', known?.name ?? '', group.length)
+          .run(
+            eventId,
+            representative.screenshotId,
+            relPath,
+            representative.color,
+            known?.category ?? 'item',
+            known?.name ?? '',
+            quantity
+          )
           .lastInsertRowid as number;
         itemIds.push(itemId);
-        existingSignatures.push({ item: { id: itemId, imagePath: relPath, quantity: group.length }, signature });
+        existingSignatures.push({ item: { id: itemId, imagePath: relPath, quantity }, signature });
       }
 
       return { itemIds };

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,6 +7,11 @@ import { openDb, type Db } from '../../../src/server/db';
 import { buildServer } from '../../../src/server/server';
 import { signUserInitData } from '../../test-helpers';
 import type { FastifyInstance } from 'fastify';
+import { extractInvasionLoot } from '../../../src/server/vision';
+
+vi.mock('../../../src/server/vision', () => ({
+  extractInvasionLoot: vi.fn(),
+}));
 
 describe('POST /api/events/:id/screenshots', () => {
   const botToken = 'test-token';
@@ -19,12 +24,19 @@ describe('POST /api/events/:id/screenshots', () => {
   beforeEach(async () => {
     dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'screenshots-test-'));
     db = openDb(':memory:');
-    app = buildServer({ db, botToken, adminTelegramIds: [1], dataDir });
+    app = buildServer({ db, botToken, adminTelegramIds: [1], dataDir, anthropicApiKey: 'test-key' });
     await app.listen({ port: 0 });
     const address = app.server.address();
     const port = typeof address === 'object' && address ? address.port : 0;
     baseUrl = `http://127.0.0.1:${port}`;
     adminInitData = signUserInitData(1, 'admin', botToken);
+
+    vi.mocked(extractInvasionLoot).mockReset();
+    // Safe default for the many existing tests that use template='invasion' only
+    // incidentally (to get a second template value, not to test vision behavior
+    // itself) — tests that care about specific vision output override with
+    // mockResolvedValueOnce/mockRejectedValueOnce before making their request.
+    vi.mocked(extractInvasionLoot).mockResolvedValue([{ x: 0.1, y: 0.1, w: 0.3, h: 0.3, rarity: 'purple', quantity: 1 }]);
   });
 
   afterEach(async () => {
@@ -417,21 +429,24 @@ describe('POST /api/events/:id/screenshots', () => {
     expect(poolCount.c).toBe(1);
   });
 
-  it('crops the item image down to just the icon badge for templates with a measured iconBox', async () => {
+  it('invasion crops each vision-detected icon into its own file, using the model-provided rarity', async () => {
     const createEventRes = await fetch(`${baseUrl}/api/events`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-telegram-init-data': adminInitData },
-      body: JSON.stringify({ title: 'Ивент 4', durationMinutes: 25 }),
+      body: JSON.stringify({ title: 'Ивент 4' }),
     });
     const { id: eventId } = await createEventRes.json();
+
+    vi.mocked(extractInvasionLoot).mockResolvedValueOnce([
+      { x: 0.1, y: 0.1, w: 0.3, h: 0.3, rarity: 'red', quantity: 1 },
+    ]);
 
     const imageBuffer = await sharp({ create: { width: 720, height: 1565, channels: 3, background: { r: 0, g: 0, b: 0 } } })
       .png()
       .toBuffer();
 
     const form = new FormData();
-    form.append('rows', '1');
-    form.append('template', 'invasion'); // has an iconBox; 'feast' above doesn't
+    form.append('template', 'invasion'); // rows is intentionally not sent — invasion doesn't need it
     form.append('file', new Blob([imageBuffer], { type: 'image/png' }), 'reward.png');
 
     const res = await fetch(`${baseUrl}/api/events/${eventId}/screenshots`, {
@@ -444,7 +459,7 @@ describe('POST /api/events/:id/screenshots', () => {
 
     const row = db.prepare('SELECT image_path, color FROM items WHERE id = ?').get(body.itemIds[0]) as any;
     expect(row.image_path).toMatch(/-icon\.png$/);
-    expect(row.color).toBe('red'); // black fixture is closer to red than blue/purple
+    expect(row.color).toBe('red'); // comes straight from the mocked vision response, not pixel sampling
   });
 
   it('rejects an unknown template', async () => {
@@ -497,5 +512,151 @@ describe('POST /api/events/:id/screenshots', () => {
       body: form,
     });
     expect(res.status).toBe(409);
+  });
+
+  it('invasion reads quantity and rarity per icon, creating separate lots for visually distinct icons', async () => {
+    const createEventRes = await fetch(`${baseUrl}/api/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-telegram-init-data': adminInitData },
+      body: JSON.stringify({ title: 'Ивент вторжение' }),
+    });
+    const { id: eventId } = await createEventRes.json();
+
+    // Left half red, right half blue — two visually distinct icons on one screenshot.
+    const imageBuffer = await sharp({ create: { width: 400, height: 200, channels: 3, background: { r: 209, g: 67, b: 78 } } })
+      .composite([
+        {
+          input: await sharp({ create: { width: 200, height: 200, channels: 3, background: { r: 74, g: 144, b: 217 } } })
+            .png()
+            .toBuffer(),
+          left: 200,
+          top: 0,
+        },
+      ])
+      .png()
+      .toBuffer();
+
+    vi.mocked(extractInvasionLoot).mockResolvedValueOnce([
+      { x: 0.05, y: 0.1, w: 0.3, h: 0.7, rarity: 'red', quantity: 2 },
+      { x: 0.65, y: 0.1, w: 0.3, h: 0.7, rarity: 'blue', quantity: 3 },
+    ]);
+
+    const form = new FormData();
+    form.append('template', 'invasion');
+    form.append('file', new Blob([imageBuffer], { type: 'image/png' }), 'reward.png');
+
+    const res = await fetch(`${baseUrl}/api/events/${eventId}/screenshots`, {
+      method: 'POST',
+      headers: { 'x-telegram-init-data': adminInitData },
+      body: form,
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.itemIds).toHaveLength(2);
+
+    const rows = db.prepare('SELECT color, quantity FROM items WHERE id IN (?, ?)').all(...body.itemIds) as {
+      color: string;
+      quantity: number;
+    }[];
+    const byColor = Object.fromEntries(rows.map((r) => [r.color, r.quantity]));
+    expect(byColor.red).toBe(2);
+    expect(byColor.blue).toBe(3);
+  });
+
+  it('invasion sums quantities when the same icon is detected more than once', async () => {
+    const createEventRes = await fetch(`${baseUrl}/api/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-telegram-init-data': adminInitData },
+      body: JSON.stringify({ title: 'Ивент сумма' }),
+    });
+    const { id: eventId } = await createEventRes.json();
+
+    // Solid color — any two boxes cropped from it look identical, simulating the same
+    // item dropping from two different boss rows on one screenshot.
+    const imageBuffer = await sharp({ create: { width: 300, height: 120, channels: 3, background: { r: 156, g: 74, b: 201 } } })
+      .png()
+      .toBuffer();
+
+    vi.mocked(extractInvasionLoot).mockResolvedValueOnce([
+      { x: 0.1, y: 0.1, w: 0.3, h: 0.3, rarity: 'purple', quantity: 2 },
+      { x: 0.1, y: 0.1, w: 0.3, h: 0.3, rarity: 'purple', quantity: 3 },
+    ]);
+
+    const form = new FormData();
+    form.append('template', 'invasion');
+    form.append('file', new Blob([imageBuffer], { type: 'image/png' }), 'reward.png');
+
+    const res = await fetch(`${baseUrl}/api/events/${eventId}/screenshots`, {
+      method: 'POST',
+      headers: { 'x-telegram-init-data': adminInitData },
+      body: form,
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.itemIds).toHaveLength(1); // same-looking icon -> one lot
+
+    const row = db.prepare('SELECT quantity FROM items WHERE id = ?').get(body.itemIds[0]) as any;
+    expect(row.quantity).toBe(5); // 2 + 3, not a count (2) or an overwrite
+  });
+
+  it('rejects an invasion upload with 400 when ANTHROPIC_API_KEY is not configured', async () => {
+    const noKeyApp = buildServer({ db, botToken, adminTelegramIds: [1], dataDir });
+    await noKeyApp.listen({ port: 0 });
+    const address = noKeyApp.server.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    const noKeyBaseUrl = `http://127.0.0.1:${port}`;
+
+    try {
+      const createEventRes = await fetch(`${noKeyBaseUrl}/api/events`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-telegram-init-data': adminInitData },
+        body: JSON.stringify({ title: 'Ивент без ключа' }),
+      });
+      const { id: eventId } = await createEventRes.json();
+
+      const imageBuffer = await sharp({ create: { width: 100, height: 40, channels: 3, background: { r: 0, g: 0, b: 0 } } })
+        .png()
+        .toBuffer();
+      const form = new FormData();
+      form.append('template', 'invasion');
+      form.append('file', new Blob([imageBuffer], { type: 'image/png' }), 'reward.png');
+
+      const res = await fetch(`${noKeyBaseUrl}/api/events/${eventId}/screenshots`, {
+        method: 'POST',
+        headers: { 'x-telegram-init-data': adminInitData },
+        body: form,
+      });
+      expect(res.status).toBe(400);
+      expect(vi.mocked(extractInvasionLoot)).not.toHaveBeenCalled();
+    } finally {
+      await noKeyApp.close();
+    }
+  });
+
+  it('surfaces a clear 502 error when vision extraction fails', async () => {
+    const createEventRes = await fetch(`${baseUrl}/api/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-telegram-init-data': adminInitData },
+      body: JSON.stringify({ title: 'Ивент ошибка' }),
+    });
+    const { id: eventId } = await createEventRes.json();
+
+    vi.mocked(extractInvasionLoot).mockRejectedValueOnce(new Error('Anthropic API request failed (500): boom'));
+
+    const imageBuffer = await sharp({ create: { width: 100, height: 40, channels: 3, background: { r: 0, g: 0, b: 0 } } })
+      .png()
+      .toBuffer();
+    const form = new FormData();
+    form.append('template', 'invasion');
+    form.append('file', new Blob([imageBuffer], { type: 'image/png' }), 'reward.png');
+
+    const res = await fetch(`${baseUrl}/api/events/${eventId}/screenshots`, {
+      method: 'POST',
+      headers: { 'x-telegram-init-data': adminInitData },
+      body: form,
+    });
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.error).toContain('Anthropic API request failed');
   });
 });
