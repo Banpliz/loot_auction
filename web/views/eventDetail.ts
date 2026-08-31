@@ -20,7 +20,8 @@ interface AdminItem {
   winners: Winner[];
 }
 
-const STATUS_LABEL: Record<string, string> = { pool: 'В пуле', auctioned: 'Разыграно', removed: 'Убран' };
+const STATUS_LABEL: Record<string, string> = { pool: 'В пуле', auctioned: 'Раскуплено', removed: 'Убран' };
+const EVENT_STATUS_LABEL: Record<string, string> = { draft: 'Черновик', open: 'Открыт', resolved: 'Завершён' };
 
 // Real phone screenshots can be several MB — over a slow/unstable mobile connection
 // through the ngrok tunnel that's long enough to drop mid-transfer (the actual cause of
@@ -47,30 +48,37 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
   root.innerHTML = '<p class="spinner-text">Загрузка…</p>';
   const data = await apiFetch(`/events/${eventId}`);
 
+  const status: 'draft' | 'open' | 'resolved' = data.event.status;
+
   root.innerHTML = `
     <button id="back-btn" class="back-btn">← Все ивенты</button>
     <section>
       <div class="section-title">
         <h3>${escapeHtml(data.event.title)}</h3>
-        <span class="status-pill">${data.event.status === 'resolved' ? 'Разыгран' : 'Открыт'}</span>
+        <span class="status-pill">${EVENT_STATUS_LABEL[status] ?? status}</span>
       </div>
       <p style="color:var(--text-muted)">
         ${data.event.deadlineAt ? `Приём заявок до ${new Date(data.event.deadlineAt).toLocaleString('ru-RU')}` : ''}
       </p>
     </section>
+    ${
+      status === 'draft'
+        ? `
     <section>
       <h3>Загрузить скриншоты аукциона</h3>
       <p style="color:var(--text-muted);font-size:0.85rem">
         Можно выбрать сразу несколько скриншотов — все они должны показывать одинаковое
         количество строк. Приложение порежет их на лоты, определит цвет редкости и само
-        объединит одинаковые на вид предметы в один лот с количеством («Кол-во») —
-        участники ставят на него один раз, а при розыгрыше система сама выберет нужное
-        число победителей из всех, кто поставил. Проверь получившееся кол-во и поправь,
-        если распозналось не то. Название не распознаётся автоматически — впиши вручную
-        только если по иконке не понятно, что за лот (например, у сундуков одного вида,
-        но разного уровня — учти, что такие лоты тоже объединятся в один, раз иконка
-        совпадает, так что кол-во и пометку для них стоит проверить особенно внимательно).
-        Цену не показываем — участники и так видят её в игре.
+        объединит одинаковые на вид предметы в один лот с количеством («Кол-во»). Ставка
+        бронирует один экземпляр лота сразу — кто раньше нажал, тому и досталось; когда
+        «Кол-во» дойдёт до нуля, лот станет серым и недоступным для ставок. Проверь
+        получившееся кол-во и поправь, если распозналось не то. Название не распознаётся
+        автоматически — впиши вручную только если по иконке не понятно, что за лот
+        (например, у сундуков одного вида, но разного уровня — учти, что такие лоты тоже
+        объединятся в один, раз иконка совпадает, так что кол-во и пометку для них стоит
+        проверить особенно внимательно). Цену не показываем — участники и так видят её в
+        игре. Редактировать лоты можно, пока не нажата «Начать аукцион» — после старта
+        список блокируется.
       </p>
       <form id="screenshot-form">
         <div class="field-row">
@@ -85,13 +93,27 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
       </form>
       <p id="upload-error" class="error"></p>
       <p id="upload-status" style="color:var(--text-muted);font-size:0.85rem"></p>
-    </section>
+    </section>`
+        : ''
+    }
     <section>
       <div class="section-title"><h3>Лоты</h3></div>
-      <input id="lot-search" type="search" placeholder="Поиск лота по названию…" />
+      ${status === 'draft' ? `<input id="lot-search" type="search" placeholder="Поиск лота по названию…" />` : ''}
       <div id="event-items"></div>
-      <button id="resolve-btn" class="btn-block" style="margin-top:0.75rem">Разыграть всё</button>
-      <p id="resolve-error" class="error"></p>
+      ${
+        status === 'draft'
+          ? `
+      <label style="margin-top:0.75rem">Длительность приёма заявок (в минутах)
+        <input id="start-duration" type="number" min="1" value="25" required />
+      </label>
+      <button id="start-btn" class="btn-block" style="margin-top:0.5rem">Начать аукцион</button>
+      <p id="start-error" class="error"></p>`
+          : status === 'open'
+            ? `
+      <button id="finish-btn" class="btn-block" style="margin-top:0.75rem">Завершить аукцион</button>
+      <p id="finish-error" class="error"></p>`
+            : ''
+      }
     </section>
   `;
 
@@ -221,100 +243,149 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
     });
   }
 
+  function renderReadOnlyItems() {
+    const itemsEl = root.querySelector('#event-items') as HTMLElement;
+    if (allItems.length === 0) {
+      itemsEl.innerHTML = '<p class="empty-state">Лотов нет</p>';
+      return;
+    }
+    itemsEl.innerHTML = `<div class="items">${allItems
+      .map((item) => {
+        const colorLabel = ITEM_COLORS.find((c) => c.value === item.color)?.label ?? item.color;
+        const categoryLabel = ITEM_CATEGORIES.find((c) => c.value === item.category)?.label ?? item.category;
+        return `
+        <div class="admin-item" data-id="${item.id}">
+          <img src="/uploads/${item.imagePath}" />
+          <p>${escapeHtml(item.name) || '—'}</p>
+          <span class="status-pill">
+            ${colorLabel} · ${categoryLabel} · Осталось ${item.quantity} · ${STATUS_LABEL[item.status]}
+            ${item.winners.length > 0 ? ' · ' + item.winners.map((w) => escapeHtml(w.nickname ?? '—')).join(', ') : ''}
+          </span>
+        </div>`;
+      })
+      .join('')}</div>`;
+  }
+
   async function loadItems() {
     const current = await apiFetch(`/events/${eventId}`);
     allItems = current.items;
-    renderItemsFiltered((root.querySelector('#lot-search') as HTMLInputElement).value);
+    if (status === 'draft') {
+      renderItemsFiltered((root.querySelector('#lot-search') as HTMLInputElement).value);
+    } else {
+      renderReadOnlyItems();
+    }
   }
 
-  (root.querySelector('#lot-search') as HTMLInputElement).addEventListener('input', (e) => {
-    renderItemsFiltered((e.target as HTMLInputElement).value);
-  });
+  if (status === 'draft') {
+    (root.querySelector('#lot-search') as HTMLInputElement).addEventListener('input', (e) => {
+      renderItemsFiltered((e.target as HTMLInputElement).value);
+    });
+  }
 
-  (root.querySelector('#screenshot-form') as HTMLFormElement).addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const form = e.target as HTMLFormElement;
-    const submitBtn = form.querySelector('button[type="submit"]') as HTMLButtonElement;
-    const errorEl = root.querySelector('#upload-error') as HTMLElement;
-    const statusEl = root.querySelector('#upload-status') as HTMLElement;
-    errorEl.textContent = '';
-    statusEl.textContent = '';
+  if (status === 'draft') {
+    (root.querySelector('#screenshot-form') as HTMLFormElement).addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = e.target as HTMLFormElement;
+      const submitBtn = form.querySelector('button[type="submit"]') as HTMLButtonElement;
+      const errorEl = root.querySelector('#upload-error') as HTMLElement;
+      const statusEl = root.querySelector('#upload-status') as HTMLElement;
+      errorEl.textContent = '';
+      statusEl.textContent = '';
 
-    const rows = (form.elements.namedItem('rows') as HTMLInputElement).value;
-    const template = (form.elements.namedItem('template') as HTMLSelectElement).value;
-    const files = Array.from((form.elements.namedItem('file') as HTMLInputElement).files ?? []);
-    if (files.length === 0) return;
+      const rows = (form.elements.namedItem('rows') as HTMLInputElement).value;
+      const template = (form.elements.namedItem('template') as HTMLSelectElement).value;
+      const files = Array.from((form.elements.namedItem('file') as HTMLInputElement).files ?? []);
+      if (files.length === 0) return;
 
-    submitBtn.disabled = true;
-    const failed: string[] = [];
-    const webApp = getTelegramWebApp();
+      submitBtn.disabled = true;
+      const failed: string[] = [];
+      const webApp = getTelegramWebApp();
 
-    const MAX_ATTEMPTS = 3;
+      const MAX_ATTEMPTS = 3;
 
-    // One screenshot per request, uploaded one at a time — a big multipart body with
-    // many real screenshots is exactly what was timing out (mobile connection / ngrok
-    // tunnel dropping mid-transfer on a large upload). Small requests are far less
-    // likely to get cut off, and a single failed file doesn't take the rest down with it.
-    // Each file also gets a few retries — on a flaky connection a dropped attempt often
-    // just succeeds on the next try, without the admin having to notice and redo it.
-    for (let i = 0; i < files.length; i++) {
-      let lastError: Error | undefined;
-      let succeeded = false;
+      // One screenshot per request, uploaded one at a time — a big multipart body with
+      // many real screenshots is exactly what was timing out (mobile connection / ngrok
+      // tunnel dropping mid-transfer on a large upload). Small requests are far less
+      // likely to get cut off, and a single failed file doesn't take the rest down with it.
+      // Each file also gets a few retries — on a flaky connection a dropped attempt often
+      // just succeeds on the next try, without the admin having to notice and redo it.
+      for (let i = 0; i < files.length; i++) {
+        let lastError: Error | undefined;
+        let succeeded = false;
 
-      for (let attempt = 1; attempt <= MAX_ATTEMPTS && !succeeded; attempt++) {
-        const attemptLabel = attempt > 1 ? ` (попытка ${attempt} из ${MAX_ATTEMPTS})` : '';
-        try {
-          statusEl.textContent = `Сжимаю ${i + 1} из ${files.length}${attemptLabel}…`;
-          submitBtn.textContent = `Сжимаю ${i + 1} из ${files.length}…`;
-          const compressed = await compressForUpload(files[i]);
+        for (let attempt = 1; attempt <= MAX_ATTEMPTS && !succeeded; attempt++) {
+          const attemptLabel = attempt > 1 ? ` (попытка ${attempt} из ${MAX_ATTEMPTS})` : '';
+          try {
+            statusEl.textContent = `Сжимаю ${i + 1} из ${files.length}${attemptLabel}…`;
+            submitBtn.textContent = `Сжимаю ${i + 1} из ${files.length}…`;
+            const compressed = await compressForUpload(files[i]);
 
-          statusEl.textContent = `Загружаю ${i + 1} из ${files.length}${attemptLabel}…`;
-          submitBtn.textContent = `Загружаю ${i + 1} из ${files.length}…`;
-          const fd = new FormData();
-          fd.append('rows', rows);
-          fd.append('template', template);
-          fd.append('file', compressed, files[i].name.replace(/\.\w+$/, '.jpg'));
+            statusEl.textContent = `Загружаю ${i + 1} из ${files.length}${attemptLabel}…`;
+            submitBtn.textContent = `Загружаю ${i + 1} из ${files.length}…`;
+            const fd = new FormData();
+            fd.append('rows', rows);
+            fd.append('template', template);
+            fd.append('file', compressed, files[i].name.replace(/\.\w+$/, '.jpg'));
 
-          const res = await fetch(`/api/events/${eventId}/screenshots`, {
-            method: 'POST',
-            headers: { 'x-telegram-init-data': webApp.initData },
-            body: fd,
-          });
-          if (!res.ok) {
-            const body = await res.json().catch(() => ({ error: `Ошибка ${res.status}` }));
-            throw new Error(body.error ?? `Ошибка ${res.status}`);
+            const res = await fetch(`/api/events/${eventId}/screenshots`, {
+              method: 'POST',
+              headers: { 'x-telegram-init-data': webApp.initData },
+              body: fd,
+            });
+            if (!res.ok) {
+              const body = await res.json().catch(() => ({ error: `Ошибка ${res.status}` }));
+              throw new Error(body.error ?? `Ошибка ${res.status}`);
+            }
+            await loadItems();
+            succeeded = true;
+          } catch (err) {
+            lastError = err as Error;
+            if (attempt < MAX_ATTEMPTS) await new Promise((r) => setTimeout(r, 1500));
           }
-          await loadItems();
-          succeeded = true;
-        } catch (err) {
-          lastError = err as Error;
-          if (attempt < MAX_ATTEMPTS) await new Promise((r) => setTimeout(r, 1500));
         }
+
+        if (!succeeded) failed.push(`${files[i].name}: ${lastError?.message}`);
       }
 
-      if (!succeeded) failed.push(`${files[i].name}: ${lastError?.message}`);
-    }
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Загрузить';
+      form.reset();
 
-    submitBtn.disabled = false;
-    submitBtn.textContent = 'Загрузить';
-    form.reset();
+      if (failed.length > 0) {
+        errorEl.textContent = `Не загрузилось (${failed.length} из ${files.length}): ${failed.join('; ')}`;
+      }
+      const okCount = files.length - failed.length;
+      statusEl.textContent = okCount > 0 ? `Загружено ${okCount} из ${files.length}.` : '';
+    });
+  }
 
-    if (failed.length > 0) {
-      errorEl.textContent = `Не загрузилось (${failed.length} из ${files.length}): ${failed.join('; ')}`;
-    }
-    const okCount = files.length - failed.length;
-    statusEl.textContent = okCount > 0 ? `Загружено ${okCount} из ${files.length}.` : '';
-  });
+  if (status === 'draft') {
+    (root.querySelector('#start-btn') as HTMLButtonElement).addEventListener('click', async () => {
+      const durationMinutes = Number((root.querySelector('#start-duration') as HTMLInputElement).value);
+      try {
+        await apiFetch(`/events/${eventId}/start`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ durationMinutes }),
+        });
+        renderEventDetail(root, eventId, onBack);
+      } catch (err) {
+        (root.querySelector('#start-error') as HTMLElement).textContent = (err as Error).message;
+      }
+    });
+  }
 
-  (root.querySelector('#resolve-btn') as HTMLButtonElement).addEventListener('click', async () => {
-    if (!confirm('Разыграть все лоты в пуле? Это действие нельзя отменить.')) return;
-    try {
-      await apiFetch(`/events/${eventId}/resolve`, { method: 'POST' });
-      await loadItems();
-    } catch (err) {
-      (root.querySelector('#resolve-error') as HTMLElement).textContent = (err as Error).message;
-    }
-  });
+  if (status === 'open') {
+    (root.querySelector('#finish-btn') as HTMLButtonElement).addEventListener('click', async () => {
+      if (!confirm('Завершить приём заявок? Дальше никто не сможет поставить или отменить ставку.')) return;
+      try {
+        await apiFetch(`/events/${eventId}/finish`, { method: 'POST' });
+        renderEventDetail(root, eventId, onBack);
+      } catch (err) {
+        (root.querySelector('#finish-error') as HTMLElement).textContent = (err as Error).message;
+      }
+    });
+  }
 
   await loadItems();
 }
