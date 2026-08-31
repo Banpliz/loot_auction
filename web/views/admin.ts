@@ -7,11 +7,11 @@ interface EventSummary {
   id: number;
   title: string;
   deadlineAt: string | null;
-  status: 'open' | 'resolved';
+  status: 'draft' | 'open' | 'resolved';
   itemCount: number;
 }
 
-const STATUS_LABEL: Record<string, string> = { open: 'Открыт', resolved: 'Разыгран' };
+const STATUS_LABEL: Record<string, string> = { draft: 'Черновик', open: 'Открыт', resolved: 'Завершён' };
 
 export async function renderAdmin(root: HTMLElement) {
   await showEventList(root);
@@ -23,9 +23,6 @@ async function showEventList(root: HTMLElement) {
       <h3>Новый ивент</h3>
       <form id="event-form">
         <input name="title" placeholder="Название ивента" required />
-        <label>Длительность приёма заявок (в минутах)
-          <input name="durationMinutes" type="number" min="1" placeholder="Например, 25" value="25" required />
-        </label>
         <button type="submit" class="btn-block">Создать ивент</button>
       </form>
       <p id="create-error" class="error"></p>
@@ -93,10 +90,9 @@ async function showEventList(root: HTMLElement) {
       const event = await apiFetch('/events', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ title: fd.get('title'), durationMinutes: Number(fd.get('durationMinutes')) }),
+        body: JSON.stringify({ title: fd.get('title') }),
       });
       form.reset();
-      (form.elements.namedItem('durationMinutes') as HTMLInputElement).value = '25';
       renderEventDetail(root, event.id, () => showEventList(root));
     } catch (err) {
       showError('#create-error', err);
