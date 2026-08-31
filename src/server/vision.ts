@@ -1,0 +1,109 @@
+const MODEL = 'claude-sonnet-5';
+const API_URL = 'https://api.anthropic.com/v1/messages';
+const ANTHROPIC_VERSION = '2023-06-01';
+
+export interface VisionLotItem {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  rarity: 'blue' | 'purple' | 'red';
+  quantity: number;
+}
+
+// Fraction-of-image box tightly around the icon + its rarity frame + its own ×N
+// quantity badge — matches grid-slice.ts's Box shape exactly, so the caller can crop
+// it with the same cropBox() feast already uses for its iconBox. Boss name and
+// place/rank are explicitly excluded — the admin only cares about the loot itself.
+const PROMPT = `Это скриншот экрана "Трофеи" из мобильной игры — список побеждённых боссов, у каждого своя строка с наградами. Для КАЖДОЙ иконки награды на скриншоте (по всем строкам) верни:
+- рамку (x, y, w, h — доли от размера всей картинки, 0..1), плотно обхватывающую саму иконку награды вместе с её рамкой редкости и числом-бейджиком в углу (без имени босса, без места/медали и без окружающего текста);
+- rarity — цвет рамки редкости иконки: "blue", "purple" или "red";
+- quantity — число с маленького бейджика "×N" в углу иконки (если бейджика не видно, используй 1).
+
+Игнорируй имя босса и место (медаль/1/2/3/4) — они не нужны. Верни только сами иконки наград.`;
+
+export async function extractInvasionLoot(imageBuffer: Buffer, apiKey: string): Promise<VisionLotItem[]> {
+  if (!apiKey) {
+    throw new Error('ANTHROPIC_API_KEY is not configured');
+  }
+
+  const res = await fetch(API_URL, {
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': ANTHROPIC_VERSION,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      max_tokens: 1024,
+      tools: [
+        {
+          name: 'extract_trophy_loot',
+          description: 'Records every reward icon found on the trophies screenshot.',
+          input_schema: {
+            type: 'object',
+            properties: {
+              items: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    x: { type: 'number' },
+                    y: { type: 'number' },
+                    w: { type: 'number' },
+                    h: { type: 'number' },
+                    rarity: { type: 'string', enum: ['blue', 'purple', 'red'] },
+                    quantity: { type: 'integer', minimum: 1 },
+                  },
+                  required: ['x', 'y', 'w', 'h', 'rarity', 'quantity'],
+                },
+              },
+            },
+            required: ['items'],
+          },
+        },
+      ],
+      tool_choice: { type: 'tool', name: 'extract_trophy_loot' },
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imageBuffer.toString('base64') } },
+            { type: 'text', text: PROMPT },
+          ],
+        },
+      ],
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Anthropic API request failed (${res.status}): ${body.slice(0, 300)}`);
+  }
+
+  const data = (await res.json()) as { content?: { type: string; input?: unknown }[] };
+  const toolUse = data.content?.find((block) => block.type === 'tool_use') as
+    | { type: 'tool_use'; input?: { items?: unknown[] } }
+    | undefined;
+  if (!toolUse || !Array.isArray(toolUse.input?.items)) {
+    throw new Error('Anthropic API response did not include the expected tool_use block');
+  }
+
+  return toolUse.input.items.map((raw, i) => validateItem(raw, i));
+}
+
+function validateItem(raw: unknown, index: number): VisionLotItem {
+  const item = raw as Partial<VisionLotItem>;
+  const isFraction = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1;
+  if (!isFraction(item.x) || !isFraction(item.y) || !isFraction(item.w) || !isFraction(item.h)) {
+    throw new Error(`item ${index}: x/y/w/h must be numbers between 0 and 1`);
+  }
+  if (item.rarity !== 'blue' && item.rarity !== 'purple' && item.rarity !== 'red') {
+    throw new Error(`item ${index}: rarity must be blue, purple, or red`);
+  }
+  if (!Number.isInteger(item.quantity) || (item.quantity as number) < 1) {
+    throw new Error(`item ${index}: quantity must be a positive integer`);
+  }
+  return { x: item.x, y: item.y, w: item.w, h: item.h, rarity: item.rarity, quantity: item.quantity } as VisionLotItem;
+}
