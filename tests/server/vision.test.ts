@@ -37,7 +37,9 @@ describe('extractInvasionLoot', () => {
     });
 
     const result = await extractInvasionLoot(fakeImage, 'test-key');
-    expect(result).toEqual([{ x: 0.1, y: 0.2, w: 0.1, h: 0.1, rarity: 'purple', quantity: 2 }]);
+    // Expanded by the 8% margin applied post-validation (see MARGIN_RATIO in vision.ts):
+    // marginX/Y = 0.1 * 0.08 = 0.008, so x/y shrink by that and w/h grow by 2x that.
+    expect(result).toEqual([{ x: 0.092, y: 0.192, w: 0.116, h: 0.116, rarity: 'purple', quantity: 2 }]);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, options] = fetchMock.mock.calls[0];
@@ -57,6 +59,23 @@ describe('extractInvasionLoot', () => {
     const textBlock = body.messages[0].content.find((b: any) => b.type === 'text');
     expect(textBlock.text.toLowerCase()).toContain('трофеи');
     expect(textBlock.text.toLowerCase()).toMatch(/игнорир/); // instructed to ignore boss name/rank
+  });
+
+  it('clamps the margin expansion so a box near the image edge never exceeds 0..1', async () => {
+    mockFetchOnce({
+      ok: true,
+      json: async () => ({
+        content: [{ type: 'tool_use', input: { items: [{ x: 0.01, y: 0.01, w: 0.1, h: 0.1, rarity: 'red', quantity: 1 }] } }],
+      }),
+    });
+
+    const [result] = await extractInvasionLoot(fakeImage, 'test-key');
+    // Unpadded margin would push x/y to 0.01 - 0.008 = 0.002 (fine, > 0), but confirms
+    // the clamp never goes negative even this close to the edge.
+    expect(result.x).toBeGreaterThanOrEqual(0);
+    expect(result.y).toBeGreaterThanOrEqual(0);
+    expect(result.x + result.w).toBeLessThanOrEqual(1);
+    expect(result.y + result.h).toBeLessThanOrEqual(1);
   });
 
   it('calls a custom baseUrl instead of api.anthropic.com when one is passed', async () => {

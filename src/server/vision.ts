@@ -40,6 +40,13 @@ export interface VisionLotItem {
 // row's text. Content selection was right; only the box height (h) was wrong. Added an
 // explicit height ceiling (icon ≈ square, icon+label ≈ up to 1.3x taller than wide) and
 // "prefer a slightly short box over one that bleeds into the next row."
+//
+// Round 7 (reverting round 6): round 6 asked the model to add its own margin around the
+// box, which made box *positioning* worse (boxes started drifting/shifting instead of
+// just growing evenly) — the model isn't reliable at both locating AND padding a box in
+// one step. Reverted the prompt to round 5's tight/snug framing and moved the margin to
+// a deterministic post-processing step in validateItem() instead — expanding a box the
+// model already got right is trivial arithmetic, not something worth asking an LLM to do.
 const PROMPT = `Это скриншот экрана "Трофеи" из мобильной игры. На экране один светлый (кремовый/бежевый) прямоугольный ПАНЕЛЬ-блок со списком побеждённых боссов, каждый — отдельная строка внутри этой панели. Всё, что находится ВНЕ этой светлой панели (тёмный фон игры сверху/снизу/по краям экрана, чат альянса, любые всплывающие сообщения, подсказка «Нажмите на пустую область, чтобы закрыть», нижняя строка футера «Участники битвы альянсов могут торговаться за трофеи») — полностью игнорируй, туда рамки не ставь.
 
 Внутри панели, в каждой строке слева направо идёт:
@@ -55,14 +62,19 @@ const PROMPT = `Это скриншот экрана "Трофеи" из моб�
 
 Если по какому-то элементу не уверен, реальная это иконка награды или нет — пропусти его. Лучше вернуть меньше элементов, чем включить значок места или кусок постороннего текста/чата.
 
-ВАЖНО про высоту рамки (h): рамка должна заканчиваться сразу под подписью уровня/тегом «Уник.» иконки, если она есть (у сундука — сразу под самим сундуком). Она НЕ должна тянуться вниз дальше этого — между строками разных боссов в панели есть пустой отступ, и рамка не должна залезать в этот отступ и тем более в текст/значок места СЛЕДУЮЩЕЙ строки босса. По высоте иконка (а) вместе с подписью под ней — это примерно квадрат или чуть выше квадрата (высота не больше чем в 1.3 раза больше ширины), иконка сундука (б) без подписи — примерно квадрат (высота ≈ ширина). Если сомневаешься насчёт высоты — лучше сделать рамку чуть меньше (даже если чуть обрежет край иконки), чем оставить лишнее пустое место или соседний элемент внизу.
-
-По краям (сверху/снизу/слева/справа): не обрезай впритык по самому контуру цветной рамки редкости — оставь небольшой отступ (примерно 5-10% от размера иконки) со всех сторон, чтобы нижний/верхний кончик ромба или уголок рамки не срезался в край картинки. То есть рамка (x, y, w, h) должна быть чуть ЩИРЕ и ВЫШЕ самой иконки, а не впритык по её пикселям — с отступом, но без залезания в соседние иконки, подписи или следующую строку (см. правило про высоту выше).
+ВАЖНО про высоту рамки (h): рамка должна плотно облегать иконку и заканчиваться сразу под её подписью уровня/тегом «Уник.», если она есть (у сундука — сразу под самим сундуком). Она НЕ должна тянуться вниз дальше этого — между строками разных боссов в панели есть пустой отступ, и рамка не должна залезать в этот отступ и тем более в текст/значок места СЛЕДУЮЩЕЙ строки босса. По высоте иконка (а) вместе с подписью под ней — это примерно квадрат или чуть выше квадрата (высота не больше чем в 1.3 раза больше ширины), иконка сундука (б) без подписи — примерно квадрат (высота ≈ ширина). Если сомневаешься насчёт высоты — лучше сделать рамку чуть меньше (даже если чуть обрежет край иконки), чем оставить лишнее пустое место или соседний элемент внизу.
 
 Для КАЖДОЙ настоящей иконки награды (пункт 3 выше, по всем строкам панели) верни:
-- рамку (x, y, w, h — доли от размера всей картинки, 0..1), обхватывающую иконку (картинку предмета/сундука, её цветную рамку редкости, число-бейджик «×N» в углу, и — для иконок вида (а) — подпись уровня/тег под ней, если есть) с небольшим отступом по краям, как описано выше;
+- рамку (x, y, w, h — доли от размера всей картинки, 0..1), плотно обхватывающую иконку (картинку предмета/сундука, её цветную рамку редкости, число-бейджик «×N» в углу, и — для иконок вида (а) — подпись уровня/тег под ней, если есть) и не более того;
 - rarity — цвет рамки редкости иконки: "blue", "purple" или "red";
 - quantity — число с маленького бейджика "×N" в углу иконки (если бейджика не видно, используй 1).`;
+
+// Applied to the model's (already-validated) box after it returns — expanding a
+// correctly-located box outward by a fixed ratio is trivial, deterministic arithmetic,
+// unlike asking the model to locate AND pad the box in one step (round 6 tried that and
+// it made box *positioning* worse, not just the margin). Clamped to stay within the
+// source image — never expands past x/y = 0 or x+w/y+h = 1.
+const MARGIN_RATIO = 0.08;
 
 // baseUrl defaults to Anthropic's own endpoint, but can be pointed at a wire-compatible
 // proxy (same x-api-key header, same /v1/messages request/response shape, just a
@@ -172,5 +184,13 @@ function validateItem(raw: unknown, index: number): VisionLotItem {
   if (!isPositiveInt(item.quantity)) {
     throw new Error(`item ${index}: quantity must be a positive integer`);
   }
-  return { x: item.x, y: item.y, w: item.w, h: item.h, rarity: item.rarity, quantity: item.quantity };
+
+  const marginX = item.w * MARGIN_RATIO;
+  const marginY = item.h * MARGIN_RATIO;
+  const x = Math.max(0, item.x - marginX);
+  const y = Math.max(0, item.y - marginY);
+  const w = Math.min(1 - x, item.w + 2 * marginX);
+  const h = Math.min(1 - y, item.h + 2 * marginY);
+
+  return { x, y, w, h, rarity: item.rarity, quantity: item.quantity };
 }
