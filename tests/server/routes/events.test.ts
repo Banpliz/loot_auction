@@ -16,16 +16,15 @@ describe('events routes', () => {
     app = buildServer({ db, botToken, adminTelegramIds: [1], dataDir: '/tmp/loot-auction-test' });
     adminInitData = signUserInitData(1, 'admin', botToken);
     memberInitData = signUserInitData(2, 'bob', botToken);
-    // seed user 2 with nickname so winnerNickname can be asserted later
     db.prepare("INSERT INTO users (telegram_id, username, game_nickname) VALUES (2, 'bob', 'Bob')").run();
   });
 
-  it('POST /events is admin-only and stores a deadline from durationMinutes', async () => {
+  it('POST /events is admin-only and creates a draft event with no deadline', async () => {
     const forbidden = await app.inject({
       method: 'POST',
       url: '/api/events',
       headers: { 'x-telegram-init-data': memberInitData, 'content-type': 'application/json' },
-      payload: { title: 'Ивент', durationMinutes: 25 },
+      payload: { title: 'Ивент' },
     });
     expect(forbidden.statusCode).toBe(403);
 
@@ -33,11 +32,24 @@ describe('events routes', () => {
       method: 'POST',
       url: '/api/events',
       headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
-      payload: { title: 'Ивент 24.08', durationMinutes: 25 },
+      payload: { title: 'Ивент 31.08' },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json().title).toBe('Ивент 24.08');
-    expect(res.json().deadlineAt).not.toBeNull();
+    expect(res.json()).toMatchObject({ title: 'Ивент 31.08', status: 'draft' });
+
+    const row = db.prepare('SELECT status, deadline_at FROM events WHERE id = ?').get(res.json().id) as any;
+    expect(row.status).toBe('draft');
+    expect(row.deadline_at).toBeNull();
+  });
+
+  it('POST /events rejects a blank title', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/events',
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { title: '   ' },
+    });
+    expect(res.statusCode).toBe(400);
   });
 
   it('GET /events/current returns null when there is no event yet', async () => {
@@ -45,12 +57,174 @@ describe('events routes', () => {
     expect(res.json()).toEqual({ event: null, items: [] });
   });
 
-  it('resolve picks a random winner per claimed item and leaves unclaimed items in the pool', async () => {
+  it('GET /events/current excludes draft events, even when they are the most recently created', async () => {
+    const openRes = await app.inject({
+      method: 'POST',
+      url: '/api/events',
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { title: 'Открытый' },
+    });
+    const openId = openRes.json().id;
+    await app.inject({
+      method: 'POST',
+      url: `/api/events/${openId}/start`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { durationMinutes: 25 },
+    });
+
+    // Created after the open event, but never started — must not hide it from users.
+    await app.inject({
+      method: 'POST',
+      url: '/api/events',
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { title: 'Черновик' },
+    });
+
+    const res = await app.inject({ method: 'GET', url: '/api/events/current', headers: { 'x-telegram-init-data': memberInitData } });
+    expect(res.json().event.title).toBe('Открытый');
+  });
+
+  it('POST /events/:id/start sets a deadline and switches status to open, admin-only', async () => {
     const createRes = await app.inject({
       method: 'POST',
       url: '/api/events',
       headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
-      payload: { title: 'Ивент', durationMinutes: 25 },
+      payload: { title: 'Ивент' },
+    });
+    const eventId = createRes.json().id;
+
+    const forbidden = await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/start`,
+      headers: { 'x-telegram-init-data': memberInitData, 'content-type': 'application/json' },
+      payload: { durationMinutes: 25 },
+    });
+    expect(forbidden.statusCode).toBe(403);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/start`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { durationMinutes: 25 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().deadlineAt).not.toBeNull();
+
+    const row = db.prepare('SELECT status, deadline_at FROM events WHERE id = ?').get(eventId) as any;
+    expect(row.status).toBe('open');
+    expect(new Date(row.deadline_at).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('POST /events/:id/start rejects a missing/zero durationMinutes and starting twice', async () => {
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/events',
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { title: 'Ивент' },
+    });
+    const eventId = createRes.json().id;
+
+    const badDuration = await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/start`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { durationMinutes: 0 },
+    });
+    expect(badDuration.statusCode).toBe(400);
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/start`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { durationMinutes: 25 },
+    });
+    const twice = await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/start`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { durationMinutes: 25 },
+    });
+    expect(twice.statusCode).toBe(409);
+  });
+
+  it('POST /events/:id/finish closes bidding and marks the event resolved, admin-only', async () => {
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/events',
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { title: 'Ивент' },
+    });
+    const eventId = createRes.json().id;
+    await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/start`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { durationMinutes: 25 },
+    });
+
+    const forbidden = await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/finish`,
+      headers: { 'x-telegram-init-data': memberInitData },
+    });
+    expect(forbidden.statusCode).toBe(403);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/finish`,
+      headers: { 'x-telegram-init-data': adminInitData },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const row = db.prepare('SELECT status, deadline_at FROM events WHERE id = ?').get(eventId) as any;
+    expect(row.status).toBe('resolved');
+    expect(new Date(row.deadline_at).getTime()).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('POST /events/:id/finish preserves an already-past deadline instead of resetting it, and rejects finishing twice', async () => {
+    const pastDeadline = new Date(Date.now() - 60_000).toISOString();
+    const eventId = db
+      .prepare("INSERT INTO events (title, status, deadline_at) VALUES ('Просрочен', 'open', ?)")
+      .run(pastDeadline).lastInsertRowid as number;
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/finish`,
+      headers: { 'x-telegram-init-data': adminInitData },
+    });
+    expect(res.statusCode).toBe(200);
+    const row = db.prepare('SELECT deadline_at FROM events WHERE id = ?').get(eventId) as any;
+    expect(row.deadline_at).toBe(pastDeadline);
+
+    const twice = await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/finish`,
+      headers: { 'x-telegram-init-data': adminInitData },
+    });
+    expect(twice.statusCode).toBe(409);
+  });
+
+  it('POST /events/:id/finish rejects a draft event (must be open first)', async () => {
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/events',
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { title: 'Ивент' },
+    });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/events/${createRes.json().id}/finish`,
+      headers: { 'x-telegram-init-data': adminInitData },
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('claimed items show up in the winners list once sold out; unclaimed items stay in the pool', async () => {
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/events',
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { title: 'Ивент' },
     });
     const eventId = createRes.json().id;
 
@@ -63,18 +237,21 @@ describe('events routes', () => {
     const unclaimedItem = db
       .prepare("INSERT INTO items (event_id, screenshot_id, name, image_path, status) VALUES (?, ?, 'Щит', 'items/b.png', 'pool')")
       .run(eventId, screenshot.lastInsertRowid);
-    db.prepare('INSERT INTO claims (item_id, telegram_id) VALUES (?, ?)').run(claimedItem.lastInsertRowid, 2);
 
-    const resolveRes = await app.inject({
+    await app.inject({
       method: 'POST',
-      url: `/api/events/${eventId}/resolve`,
-      headers: { 'x-telegram-init-data': adminInitData },
+      url: `/api/events/${eventId}/start`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { durationMinutes: 25 },
     });
-    expect(resolveRes.statusCode).toBe(200);
+    await app.inject({
+      method: 'POST',
+      url: `/api/items/${claimedItem.lastInsertRowid}/claim`,
+      headers: { 'x-telegram-init-data': memberInitData },
+    });
 
     const poolRes = await app.inject({ method: 'GET', url: '/api/events/current', headers: { 'x-telegram-init-data': memberInitData } });
     const body = poolRes.json();
-    expect(body.event.status).toBe('resolved');
 
     const claimed = body.items.find((i: any) => i.id === claimedItem.lastInsertRowid);
     expect(claimed.status).toBe('auctioned');
@@ -82,331 +259,15 @@ describe('events routes', () => {
 
     const unclaimed = body.items.find((i: any) => i.id === unclaimedItem.lastInsertRowid);
     expect(unclaimed.status).toBe('pool');
+    expect(unclaimed.winners).toEqual([]);
   });
 
-  it('respects per-color win limits for invasion when resolving multiple items for the same bidder', async () => {
-    const createRes = await app.inject({
-      method: 'POST',
-      url: '/api/events',
-      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
-      payload: { title: 'Ивент 2', durationMinutes: 25 },
-    });
-    const eventId = createRes.json().id;
-
-    const screenshot = db
-      .prepare("INSERT INTO screenshots (event_id, original_path, rows, template, uploaded_by) VALUES (?, ?, 1, 'invasion', 1)")
-      .run(eventId, '/tmp/original2.png');
-
-    const insertItem = db.prepare(
-      "INSERT INTO items (event_id, screenshot_id, name, image_path, status, color) VALUES (?, ?, ?, 'items/x.png', 'pool', ?)"
-    );
-    const ids: number[] = [];
-    for (const [name, color] of [
-      ['Purple A', 'purple'],
-      ['Purple B', 'purple'],
-      ['Red A', 'red'],
-      ['Blue A', 'blue'],
-      ['Blue B', 'blue'],
-      ['Blue C', 'blue'],
-    ] as const) {
-      const result = insertItem.run(eventId, screenshot.lastInsertRowid, name, color);
-      ids.push(result.lastInsertRowid as number);
-    }
-
-    // Bob (telegram_id 2) is the sole bidder on every item.
-    for (const itemId of ids) {
-      db.prepare('INSERT INTO claims (item_id, telegram_id) VALUES (?, 2)').run(itemId);
-    }
-
-    const resolveRes = await app.inject({
-      method: 'POST',
-      url: `/api/events/${eventId}/resolve`,
-      headers: { 'x-telegram-init-data': adminInitData },
-    });
-    expect(resolveRes.statusCode).toBe(200);
-
-    const rows = db.prepare('SELECT id, color, status FROM items WHERE event_id = ?').all(eventId) as {
-      id: number;
-      color: string;
-      status: string;
-    }[];
-    const wonItemIds = new Set(
-      (db.prepare('SELECT item_id FROM item_winners WHERE telegram_id = 2').all() as { item_id: number }[]).map(
-        (r) => r.item_id
-      )
-    );
-
-    const purpleRedWins = rows.filter((r) => r.color !== 'blue' && wonItemIds.has(r.id)).length;
-    const blueWins = rows.filter((r) => r.color === 'blue' && wonItemIds.has(r.id)).length;
-    expect(purpleRedWins).toBe(1);
-    expect(blueWins).toBe(2);
-
-    const unresolvedCount = rows.filter((r) => r.status === 'pool').length;
-    expect(unresolvedCount).toBe(3);
-    expect(rows.filter((r) => r.status === 'auctioned')).toHaveLength(3);
-  });
-
-  it('respects per-category win limits for feast (gear capped at 1, stones at 3), independent of color', async () => {
-    const createRes = await app.inject({
-      method: 'POST',
-      url: '/api/events',
-      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
-      payload: { title: 'Пир победы', durationMinutes: 25 },
-    });
-    const eventId = createRes.json().id;
-
-    // Default template is 'feast', but set it explicitly so this test still holds
-    // if that default ever changes.
-    const screenshot = db
-      .prepare("INSERT INTO screenshots (event_id, original_path, rows, template, uploaded_by) VALUES (?, ?, 1, 'feast', 1)")
-      .run(eventId, '/tmp/feast.png');
-
-    const insertItem = db.prepare(
-      "INSERT INTO items (event_id, screenshot_id, name, image_path, status, color, category) VALUES (?, ?, ?, 'items/x.png', 'pool', ?, ?)"
-    );
-    const ids: number[] = [];
-    // Two gear pieces of different colors (still capped together at 1, since feast
-    // groups by category, not color) plus four stones (capped at 3, not 1).
-    for (const [name, color, category] of [
-      ['Наручи', 'red', 'item'],
-      ['Плащ', 'purple', 'item'],
-      ['Камень 1', 'red', 'stone'],
-      ['Камень 2', 'red', 'stone'],
-      ['Камень 3', 'red', 'stone'],
-      ['Камень 4', 'red', 'stone'],
-    ] as const) {
-      const result = insertItem.run(eventId, screenshot.lastInsertRowid, name, color, category);
-      ids.push(result.lastInsertRowid as number);
-    }
-
-    // Bob (telegram_id 2) is the sole bidder on every item.
-    for (const itemId of ids) {
-      db.prepare('INSERT INTO claims (item_id, telegram_id) VALUES (?, 2)').run(itemId);
-    }
-
-    const resolveRes = await app.inject({
-      method: 'POST',
-      url: `/api/events/${eventId}/resolve`,
-      headers: { 'x-telegram-init-data': adminInitData },
-    });
-    expect(resolveRes.statusCode).toBe(200);
-
-    const rows = db.prepare('SELECT id, category, status FROM items WHERE event_id = ?').all(eventId) as {
-      id: number;
-      category: string;
-      status: string;
-    }[];
-    const wonItemIds = new Set(
-      (db.prepare('SELECT item_id FROM item_winners WHERE telegram_id = 2').all() as { item_id: number }[]).map(
-        (r) => r.item_id
-      )
-    );
-
-    const gearWins = rows.filter((r) => r.category === 'item' && wonItemIds.has(r.id)).length;
-    const stoneWins = rows.filter((r) => r.category === 'stone' && wonItemIds.has(r.id)).length;
-    // Categories are mutually exclusive (2026-08-28): whichever category the shuffle
-    // resolves first locks Bob into it, so exactly one of these is zero — never both
-    // nonzero, and never both zero (he's eligible for whichever comes first).
-    expect(gearWins === 0 || stoneWins === 0).toBe(true);
-    expect(gearWins > 0 || stoneWins > 0).toBe(true);
-    expect(gearWins).toBeLessThanOrEqual(1);
-    expect(stoneWins).toBeLessThanOrEqual(3);
-  });
-
-  it('feast categories are mutually exclusive: winning a stone rules out winning gear too, and vice versa', async () => {
-    const createRes = await app.inject({
-      method: 'POST',
-      url: '/api/events',
-      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
-      payload: { title: 'Пир исключение', durationMinutes: 25 },
-    });
-    const eventId = createRes.json().id;
-
-    const screenshot = db
-      .prepare("INSERT INTO screenshots (event_id, original_path, rows, template, uploaded_by) VALUES (?, ?, 1, 'feast', 1)")
-      .run(eventId, '/tmp/feast2.png');
-
-    const insertItem = db.prepare(
-      "INSERT INTO items (event_id, screenshot_id, name, image_path, status, color, category) VALUES (?, ?, ?, 'items/x.png', 'pool', 'red', ?)"
-    );
-    const gearId = insertItem.run(eventId, screenshot.lastInsertRowid, 'Наручи', 'item').lastInsertRowid as number;
-    const stoneId = insertItem.run(eventId, screenshot.lastInsertRowid, 'Камень', 'stone').lastInsertRowid as number;
-
-    // Bob is the ONLY bidder on both — with no exclusivity rule he'd win both (he's
-    // always eligible, since no one else could take either slot from him). With it,
-    // winning whichever comes first in the shuffle should lock him out of the other,
-    // leaving it unresolved in the pool (no other claimant left to give it to).
-    db.prepare('INSERT INTO claims (item_id, telegram_id) VALUES (?, 2)').run(gearId);
-    db.prepare('INSERT INTO claims (item_id, telegram_id) VALUES (?, 2)').run(stoneId);
-
-    const resolveRes = await app.inject({
-      method: 'POST',
-      url: `/api/events/${eventId}/resolve`,
-      headers: { 'x-telegram-init-data': adminInitData },
-    });
-    expect(resolveRes.statusCode).toBe(200);
-
-    const rows = db
-      .prepare('SELECT id, status FROM items WHERE id IN (?, ?)')
-      .all(gearId, stoneId) as { id: number; status: string }[];
-    const auctioned = rows.filter((r) => r.status === 'auctioned');
-    const stillPool = rows.filter((r) => r.status === 'pool');
-    expect(auctioned).toHaveLength(1); // exactly one of the two got won
-    expect(stillPool).toHaveLength(1); // the other has no one left eligible to give it to
-
-    const winners = db.prepare('SELECT item_id FROM item_winners WHERE telegram_id = 2').all() as { item_id: number }[];
-    expect(winners).toHaveLength(1); // Bob won exactly one, never both
-  });
-
-  it('draws up to quantity distinct winners for a single lot from everyone who bid on it', async () => {
-    db.prepare("INSERT INTO users (telegram_id, username, game_nickname) VALUES (3, 'alice', 'Alice')").run();
-    db.prepare("INSERT INTO users (telegram_id, username, game_nickname) VALUES (4, 'carl', 'Carl')").run();
-
-    const createRes = await app.inject({
-      method: 'POST',
-      url: '/api/events',
-      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
-      payload: { title: 'Ивент qty', durationMinutes: 25 },
-    });
-    const eventId = createRes.json().id;
-
-    const screenshot = db
-      .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
-      .run(eventId, '/tmp/original-qty.png');
-    const item = db
-      .prepare(
-        "INSERT INTO items (event_id, screenshot_id, name, image_path, status, color, quantity) VALUES (?, ?, 'Орк-шаман', 'items/x.png', 'pool', 'blue', 2)"
-      )
-      .run(eventId, screenshot.lastInsertRowid);
-    const itemId = item.lastInsertRowid as number;
-
-    // 3 bidders (one bid each, per-item claim) for a lot that only has 2 to give away.
-    for (const telegramId of [2, 3, 4]) {
-      db.prepare('INSERT INTO claims (item_id, telegram_id) VALUES (?, ?)').run(itemId, telegramId);
-    }
-
-    const resolveRes = await app.inject({
-      method: 'POST',
-      url: `/api/events/${eventId}/resolve`,
-      headers: { 'x-telegram-init-data': adminInitData },
-    });
-    expect(resolveRes.statusCode).toBe(200);
-
-    const winners = db.prepare('SELECT telegram_id FROM item_winners WHERE item_id = ?').all(itemId) as {
-      telegram_id: number;
-    }[];
-    // Exactly 2 distinct winners, both from among the 3 bidders — never more than
-    // quantity, and never the same person twice (each bidder has only one claim row).
-    expect(winners).toHaveLength(2);
-    expect(new Set(winners.map((w) => w.telegram_id)).size).toBe(2);
-    for (const w of winners) expect([2, 3, 4]).toContain(w.telegram_id);
-
-    const row = db.prepare('SELECT status FROM items WHERE id = ?').get(itemId) as { status: string };
-    expect(row.status).toBe('auctioned');
-  });
-
-  it('falls back to an eligible second bidder once the first bidder is capped out on a color group', async () => {
-    db.prepare("INSERT INTO users (telegram_id, username, game_nickname) VALUES (3, 'alice', 'Alice')").run();
-
-    const createRes = await app.inject({
-      method: 'POST',
-      url: '/api/events',
-      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
-      payload: { title: 'Ивент 3', durationMinutes: 25 },
-    });
-    const eventId = createRes.json().id;
-
-    const screenshot = db
-      .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
-      .run(eventId, '/tmp/original3.png');
-
-    const insertItem = db.prepare(
-      "INSERT INTO items (event_id, screenshot_id, name, image_path, status, color) VALUES (?, ?, ?, 'items/x.png', 'pool', 'purple')"
-    );
-    const ids: number[] = [];
-    for (const name of ['Purple A', 'Purple B']) {
-      const result = insertItem.run(eventId, screenshot.lastInsertRowid, name);
-      ids.push(result.lastInsertRowid as number);
-    }
-
-    for (const itemId of ids) {
-      db.prepare('INSERT INTO claims (item_id, telegram_id) VALUES (?, 2)').run(itemId);
-      db.prepare('INSERT INTO claims (item_id, telegram_id) VALUES (?, 3)').run(itemId);
-    }
-
-    const resolveRes = await app.inject({
-      method: 'POST',
-      url: `/api/events/${eventId}/resolve`,
-      headers: { 'x-telegram-init-data': adminInitData },
-    });
-    expect(resolveRes.statusCode).toBe(200);
-
-    const rows = db.prepare('SELECT id, status FROM items WHERE event_id = ?').all(eventId) as {
-      id: number;
-      status: string;
-    }[];
-    expect(rows.every((r) => r.status === 'auctioned')).toBe(true);
-
-    const winners = (db.prepare('SELECT telegram_id FROM item_winners WHERE item_id IN (?, ?)').all(rows[0].id, rows[1].id) as {
-      telegram_id: number;
-    }[])
-      .map((r) => r.telegram_id)
-      .sort();
-    expect(winners).toEqual([2, 3]);
-  });
-
-  it('rejects resolving an already-resolved event and does not re-roll winners', async () => {
-    const createRes = await app.inject({
-      method: 'POST',
-      url: '/api/events',
-      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
-      payload: { title: 'Ивент 4', durationMinutes: 25 },
-    });
-    const eventId = createRes.json().id;
-
-    const screenshot = db
-      .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
-      .run(eventId, '/tmp/original4.png');
-    const item = db
-      .prepare("INSERT INTO items (event_id, screenshot_id, name, image_path, status) VALUES (?, ?, 'Меч', 'items/a.png', 'pool')")
-      .run(eventId, screenshot.lastInsertRowid);
-    db.prepare('INSERT INTO claims (item_id, telegram_id) VALUES (?, 2)').run(item.lastInsertRowid);
-
-    const firstResolve = await app.inject({
-      method: 'POST',
-      url: `/api/events/${eventId}/resolve`,
-      headers: { 'x-telegram-init-data': adminInitData },
-    });
-    expect(firstResolve.statusCode).toBe(200);
-
-    const afterFirst = db.prepare('SELECT status FROM items WHERE id = ?').get(item.lastInsertRowid) as {
-      status: string;
-    };
-    const winnersAfterFirst = db.prepare('SELECT telegram_id FROM item_winners WHERE item_id = ?').all(item.lastInsertRowid);
-    expect(afterFirst.status).toBe('auctioned');
-    expect(winnersAfterFirst).toEqual([{ telegram_id: 2 }]);
-
-    const secondResolve = await app.inject({
-      method: 'POST',
-      url: `/api/events/${eventId}/resolve`,
-      headers: { 'x-telegram-init-data': adminInitData },
-    });
-    expect(secondResolve.statusCode).toBe(409);
-
-    const afterSecond = db.prepare('SELECT status FROM items WHERE id = ?').get(item.lastInsertRowid) as {
-      status: string;
-    };
-    const winnersAfterSecond = db.prepare('SELECT telegram_id FROM item_winners WHERE item_id = ?').all(item.lastInsertRowid);
-    expect(afterSecond).toEqual(afterFirst);
-    expect(winnersAfterSecond).toEqual(winnersAfterFirst);
-  });
-
-  it('GET /events lists all events with item counts, admin-only', async () => {
+  it('GET /events lists all events regardless of status, with item counts, admin-only', async () => {
     await app.inject({
       method: 'POST',
       url: '/api/events',
       headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
-      payload: { title: 'Ивент А', durationMinutes: 25 },
+      payload: { title: 'Ивент А' },
     });
 
     const forbidden = await app.inject({ method: 'GET', url: '/api/events', headers: { 'x-telegram-init-data': memberInitData } });
@@ -414,7 +275,7 @@ describe('events routes', () => {
 
     const res = await app.inject({ method: 'GET', url: '/api/events', headers: { 'x-telegram-init-data': adminInitData } });
     expect(res.json().events).toHaveLength(1);
-    expect(res.json().events[0]).toMatchObject({ title: 'Ивент А', itemCount: 0 });
+    expect(res.json().events[0]).toMatchObject({ title: 'Ивент А', status: 'draft', itemCount: 0 });
   });
 
   it('GET /events/:id and /events/current list items red first, then purple, then blue', async () => {
@@ -422,7 +283,7 @@ describe('events routes', () => {
       method: 'POST',
       url: '/api/events',
       headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
-      payload: { title: 'Ивент по цветам', durationMinutes: 25 },
+      payload: { title: 'Ивент по цветам' },
     });
     const eventId = createRes.json().id;
 
@@ -433,7 +294,6 @@ describe('events routes', () => {
     const insertItem = db.prepare(
       "INSERT INTO items (event_id, screenshot_id, name, image_path, status, color) VALUES (?, ?, ?, 'items/x.png', 'pool', ?)"
     );
-    // Inserted out of rarity order on purpose, to prove the response re-sorts them.
     for (const [name, color] of [
       ['Blue A', 'blue'],
       ['Red A', 'red'],
@@ -447,16 +307,23 @@ describe('events routes', () => {
     const adminRes = await app.inject({ method: 'GET', url: `/api/events/${eventId}`, headers: { 'x-telegram-init-data': adminInitData } });
     expect(adminRes.json().items.map((i: any) => i.color)).toEqual(['red', 'red', 'purple', 'blue', 'blue']);
 
+    await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/start`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { durationMinutes: 25 },
+    });
+
     const userRes = await app.inject({ method: 'GET', url: '/api/events/current', headers: { 'x-telegram-init-data': memberInitData } });
     expect(userRes.json().items.map((i: any) => i.color)).toEqual(['red', 'red', 'purple', 'blue', 'blue']);
   });
 
-  it('GET /events/:id returns the event with its items, admin-only', async () => {
+  it('GET /events/:id returns the event with its items, admin-only, at any status', async () => {
     const createRes = await app.inject({
       method: 'POST',
       url: '/api/events',
       headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
-      payload: { title: 'Ивент', durationMinutes: 25 },
+      payload: { title: 'Ивент' },
     });
     const eventId = createRes.json().id;
 
@@ -465,6 +332,7 @@ describe('events routes', () => {
 
     const res = await app.inject({ method: 'GET', url: `/api/events/${eventId}`, headers: { 'x-telegram-init-data': adminInitData } });
     expect(res.json().event.title).toBe('Ивент');
+    expect(res.json().event.status).toBe('draft');
     expect(res.json().items).toEqual([]);
   });
 
@@ -473,7 +341,7 @@ describe('events routes', () => {
       method: 'POST',
       url: '/api/events',
       headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
-      payload: { title: 'Ивент', durationMinutes: 25 },
+      payload: { title: 'Ивент' },
     });
     const eventId = createRes.json().id;
     const screenshot = db
@@ -493,29 +361,26 @@ describe('events routes', () => {
     expect(db.prepare('SELECT * FROM claims WHERE item_id = ?').get(itemId)).toBeUndefined();
   });
 
-  it('DELETE /events/:id succeeds for an already-resolved event (item_winners rows exist)', async () => {
+  it('DELETE /events/:id succeeds even when legacy item_winners rows exist for its items', async () => {
+    // item_winners is no longer written to by any live endpoint (see design doc), but the
+    // table is deliberately kept in the schema rather than dropped, so a row from before
+    // this change could still be sitting there. This simulates that with a direct insert
+    // and confirms the delete's existing item_winners cleanup still prevents the FK
+    // violation it was originally added to fix.
     const createRes = await app.inject({
       method: 'POST',
       url: '/api/events',
       headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
-      payload: { title: 'Резолвнутый', durationMinutes: 25 },
+      payload: { title: 'Легаси' },
     });
     const eventId = createRes.json().id;
     const screenshot = db
       .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
-      .run(eventId, '/tmp/resolved.png').lastInsertRowid as number;
+      .run(eventId, '/tmp/legacy.png').lastInsertRowid as number;
     const itemId = db
-      .prepare("INSERT INTO items (event_id, screenshot_id, name, image_path, status) VALUES (?, ?, 'X', 'items/x.png', 'pool')")
+      .prepare("INSERT INTO items (event_id, screenshot_id, name, image_path, status) VALUES (?, ?, 'X', 'items/x.png', 'auctioned')")
       .run(eventId, screenshot).lastInsertRowid as number;
-    db.prepare('INSERT INTO claims (item_id, telegram_id) VALUES (?, ?)').run(itemId, 2);
-
-    const resolveRes = await app.inject({
-      method: 'POST',
-      url: `/api/events/${eventId}/resolve`,
-      headers: { 'x-telegram-init-data': adminInitData },
-    });
-    expect(resolveRes.statusCode).toBe(200);
-    expect(db.prepare('SELECT * FROM item_winners WHERE item_id = ?').get(itemId)).toBeDefined();
+    db.prepare('INSERT INTO item_winners (item_id, telegram_id) VALUES (?, ?)').run(itemId, 2);
 
     const del = await app.inject({ method: 'DELETE', url: `/api/events/${eventId}`, headers: { 'x-telegram-init-data': adminInitData } });
     expect(del.statusCode).toBe(200);

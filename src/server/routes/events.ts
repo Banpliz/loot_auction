@@ -1,7 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { AppDeps } from '../types';
 import { requireAdmin } from '../auth';
-import { pickRandom, shuffle } from '../random';
 
 interface EventRow {
   id: number;
@@ -18,9 +17,9 @@ type CategoryGroup = 'item' | 'stone';
 // — gear (armor/weapons/etc.) capped at 1, tempering stones at 3 — so it's grouped by
 // admin-set item.category rather than color. The two feast groups are also mutually
 // exclusive (2026-08-28): winning a stone rules a person out of ever winning gear in the
-// same event, and vice versa — otherwise one person could walk away with both a gear
-// piece and 3 stones while someone else gets nothing, which the alliance considers unfair
-// ("one guy gets a lemon crate, another gets squat").
+// same event, and vice versa. Originally enforced once at the end-of-event draw; now
+// enforced by items.ts's claim endpoint on every single claim attempt (2026-08-31), since
+// there's no more draw step — see docs/superpowers/specs/2026-08-31-fcfs-reservation-design.md.
 const COLOR_WIN_LIMITS: Record<ColorGroup, number> = { purpleRed: 1, blue: 2 };
 const CATEGORY_WIN_LIMITS: Record<CategoryGroup, number> = { item: 1, stone: 3 };
 
@@ -31,7 +30,8 @@ function colorGroup(color: string): ColorGroup {
 // Returns a per-person counter key (namespaced so a color group and a category group
 // can never collide), the cap that applies to it, and — for feast only — the other
 // category's key: any existing win there makes a person ineligible for this one too.
-function winLimitGroup(template: string, color: string, category: string): { key: string; limit: number; exclusiveWith?: string } {
+// Exported for items.ts's claim endpoint, which is now the sole caller of this rule.
+export function winLimitGroup(template: string, color: string, category: string): { key: string; limit: number; exclusiveWith?: string } {
   if (template === 'feast') {
     const group: CategoryGroup = category === 'stone' ? 'stone' : 'item';
     const other: CategoryGroup = group === 'stone' ? 'item' : 'stone';
@@ -52,18 +52,19 @@ interface Winner {
   nickname: string | null;
 }
 
-// Attaches a `winners` array to each item (one entry per person a multi-quantity lot
-// drew) — a separate query instead of a JOIN because a lot can have several winners,
-// which a single-row-per-item JOIN can't represent without duplicating the other columns.
+// Attaches a `winners` array to each item — one entry per person currently holding a
+// unit of it. Reads `claims` directly (not the old `item_winners` draw ledger): under
+// first-come-first-served reservation, "claimed a unit" and "has a unit" are the same
+// thing by construction, so there's nothing left for a separate winners table to record.
 function attachWinners<T extends { id: number }>(deps: AppDeps, items: T[]): (T & { winners: Winner[] })[] {
   if (items.length === 0) return [];
   const placeholders = items.map(() => '?').join(',');
   const rows = deps.db
     .prepare(
-      `SELECT iw.item_id as itemId, u.telegram_id as telegramId, u.game_nickname as nickname
-       FROM item_winners iw
-       LEFT JOIN users u ON u.telegram_id = iw.telegram_id
-       WHERE iw.item_id IN (${placeholders})`
+      `SELECT c.item_id as itemId, u.telegram_id as telegramId, u.game_nickname as nickname
+       FROM claims c
+       LEFT JOIN users u ON u.telegram_id = c.telegram_id
+       WHERE c.item_id IN (${placeholders})`
     )
     .all(...items.map((i) => i.id)) as { itemId: number; telegramId: number; nickname: string | null }[];
 
@@ -77,7 +78,7 @@ function attachWinners<T extends { id: number }>(deps: AppDeps, items: T[]): (T 
 }
 
 export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
-  app.post<{ Body: { title: string; durationMinutes: number } }>(
+  app.post<{ Body: { title: string } }>(
     '/events',
     { preHandler: requireAdmin(deps) },
     async (request, reply) => {
@@ -86,17 +87,9 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
         reply.code(400).send({ error: 'title is required' });
         return;
       }
-      const durationMinutes = request.body?.durationMinutes;
-      const deadlineAt =
-        Number.isFinite(durationMinutes) && durationMinutes > 0
-          ? new Date(Date.now() + durationMinutes * 60_000).toISOString()
-          : null;
 
-      const result = deps.db
-        .prepare('INSERT INTO events (title, deadline_at, status) VALUES (?, ?, ?)')
-        .run(title, deadlineAt, 'open');
-
-      return { id: result.lastInsertRowid, title, deadlineAt, status: 'open' };
+      const result = deps.db.prepare("INSERT INTO events (title, status) VALUES (?, 'draft')").run(title);
+      return { id: result.lastInsertRowid, title, status: 'draft' };
     }
   );
 
@@ -131,7 +124,12 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
   });
 
   app.get('/events/current', async (request) => {
-    const event = deps.db.prepare('SELECT * FROM events ORDER BY id DESC LIMIT 1').get() as EventRow | undefined;
+    // Draft events are excluded — an admin mid-upload/edit must not leak lots to users,
+    // and (just as important) must not hide whatever event users were previously looking
+    // at while the admin works on the next one.
+    const event = deps.db.prepare("SELECT * FROM events WHERE status != 'draft' ORDER BY id DESC LIMIT 1").get() as
+      | EventRow
+      | undefined;
     if (!event) return { event: null, items: [] };
 
     const userId = request.telegramUser!.telegramId;
@@ -173,71 +171,56 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
     };
   });
 
-  app.post<{ Params: { id: string } }>(
-    '/events/:id/resolve',
+  app.post<{ Params: { id: string }; Body: { durationMinutes?: number } }>(
+    '/events/:id/start',
     { preHandler: requireAdmin(deps) },
     async (request, reply) => {
       const eventId = Number(request.params.id);
-      const event = deps.db.prepare('SELECT id, status FROM events WHERE id = ?').get(eventId) as
-        | { id: number; status: string }
+      const durationMinutes = request.body?.durationMinutes;
+      if (!Number.isFinite(durationMinutes) || (durationMinutes as number) <= 0) {
+        reply.code(400).send({ error: 'durationMinutes must be a positive number' });
+        return;
+      }
+
+      const event = deps.db.prepare('SELECT status FROM events WHERE id = ?').get(eventId) as { status: string } | undefined;
+      if (!event) {
+        reply.code(404).send({ error: 'event not found' });
+        return;
+      }
+      if (event.status !== 'draft') {
+        reply.code(409).send({ error: 'event has already started' });
+        return;
+      }
+
+      const deadlineAt = new Date(Date.now() + (durationMinutes as number) * 60_000).toISOString();
+      deps.db.prepare("UPDATE events SET status = 'open', deadline_at = ? WHERE id = ?").run(deadlineAt, eventId);
+      return { ok: true, deadlineAt };
+    }
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/events/:id/finish',
+    { preHandler: requireAdmin(deps) },
+    async (request, reply) => {
+      const eventId = Number(request.params.id);
+      const event = deps.db.prepare('SELECT status, deadline_at FROM events WHERE id = ?').get(eventId) as
+        | { status: string; deadline_at: string | null }
         | undefined;
       if (!event) {
         reply.code(404).send({ error: 'event not found' });
         return;
       }
-      if (event.status === 'resolved') {
-        reply.code(409).send({ error: 'event already resolved' });
+      if (event.status !== 'open') {
+        reply.code(409).send({ error: 'event is not open' });
         return;
       }
 
-      const insertWinner = deps.db.prepare('INSERT INTO item_winners (item_id, telegram_id) VALUES (?, ?)');
-      const markAuctioned = deps.db.prepare("UPDATE items SET status = 'auctioned', auctioned_at = datetime('now') WHERE id = ?");
-
-      const resolveAll = deps.db.transaction(() => {
-        const poolItems = deps.db
-          .prepare(
-            `SELECT i.id, i.color, i.category, i.quantity, s.template
-             FROM items i JOIN screenshots s ON s.id = i.screenshot_id
-             WHERE i.event_id = ? AND i.status = 'pool'`
-          )
-          .all(eventId) as { id: number; color: string; category: string; quantity: number; template: string }[];
-
-        const winCounts = new Map<number, Map<string, number>>();
-
-        for (const item of shuffle(poolItems)) {
-          // One bid per person per item (claims' own UNIQUE), so drawing without
-          // replacement here can never pick the same person twice for this item.
-          let remaining = deps.db.prepare('SELECT telegram_id FROM claims WHERE item_id = ?').all(item.id) as {
-            telegram_id: number;
-          }[];
-          const { key, limit, exclusiveWith } = winLimitGroup(item.template, item.color, item.category);
-
-          let wins = 0;
-          for (let i = 0; i < item.quantity; i++) {
-            const eligible = remaining.filter((c) => {
-              const counts = winCounts.get(c.telegram_id);
-              if ((counts?.get(key) ?? 0) >= limit) return false;
-              if (exclusiveWith && (counts?.get(exclusiveWith) ?? 0) > 0) return false;
-              return true;
-            });
-            const winner = pickRandom(eligible);
-            if (!winner) break; // no claimant left who hasn't already hit their group's cap
-
-            insertWinner.run(item.id, winner.telegram_id);
-            remaining = remaining.filter((c) => c.telegram_id !== winner.telegram_id);
-            wins++;
-
-            const counts = winCounts.get(winner.telegram_id) ?? new Map<string, number>();
-            counts.set(key, (counts.get(key) ?? 0) + 1);
-            winCounts.set(winner.telegram_id, counts);
-          }
-          if (wins > 0) markAuctioned.run(item.id);
-        }
-
-        deps.db.prepare("UPDATE events SET status = 'resolved' WHERE id = ?").run(eventId);
-      });
-
-      resolveAll();
+      // Only force the deadline into the past if it isn't already there — an admin
+      // finishing after the countdown already ran out shouldn't have the recorded
+      // deadline jump forward to "now".
+      const alreadyPast = !!event.deadline_at && new Date(event.deadline_at).getTime() < Date.now();
+      const deadlineAt = alreadyPast ? (event.deadline_at as string) : new Date().toISOString();
+      deps.db.prepare("UPDATE events SET status = 'resolved', deadline_at = ? WHERE id = ?").run(deadlineAt, eventId);
       return { ok: true };
     }
   );
