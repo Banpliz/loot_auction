@@ -43,6 +43,8 @@ async function buildImage(
     .toBuffer();
 }
 
+import { cropBadge } from '../../src/server/invasion-cv';
+
 describe('detectInvasionFrames', () => {
   it('detects a single icon frame inside the panel', async () => {
     const image = await buildImage(100, 200, { top: 20, bottom: 180 }, [
@@ -84,5 +86,31 @@ describe('detectInvasionFrames', () => {
       { left: 60, top: 100, width: 2, height: 2, color: BLUE }, // 4px, well under the noise floor
     ]);
     expect(await detectInvasionFrames(image)).toBeNull();
+  });
+});
+
+describe('cropBadge', () => {
+  it('crops the bottom-right corner of the frame, sized relative to the frame', async () => {
+    const image = await buildImage(100, 200, { top: 20, bottom: 180 }, [
+      { left: 60, top: 100, width: 30, height: 40, color: BLUE },
+    ]);
+    const frame = { x: 0.6, y: 0.5, w: 0.3, h: 0.2, rarity: 'blue' as const };
+    const crop = await cropBadge(image, frame);
+    const metadata = await sharp(crop).metadata();
+    // BADGE_WIDTH_RATIO=0.4, BADGE_HEIGHT_RATIO=0.3 against a 30x40px frame ->
+    // round(30*0.4)=12, round(40*0.3)=12.
+    expect(metadata.width).toBe(12);
+    expect(metadata.height).toBe(12);
+  });
+
+  it('never crops past the image edge for a frame flush against a corner', async () => {
+    const image = await buildImage(100, 200, { top: 20, bottom: 180 }, [
+      { left: 90, top: 160, width: 10, height: 20, color: RED },
+    ]);
+    const frame = { x: 0.9, y: 0.8, w: 0.1, h: 0.1, rarity: 'red' as const };
+    const crop = await cropBadge(image, frame);
+    const metadata = await sharp(crop).metadata();
+    expect(metadata.width).toBeGreaterThan(0);
+    expect(metadata.height).toBeGreaterThan(0);
   });
 });

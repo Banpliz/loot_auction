@@ -180,3 +180,26 @@ export async function detectInvasionFrames(imageBuffer: Buffer): Promise<Detecte
 
   return frames;
 }
+
+// The quantity badge sits in the icon frame's bottom-right corner in every real screenshot
+// seen this session — these ratios are a first estimate, not measured against a large
+// sample; retune if live testing shows the crop misses the number (see design doc's Open
+// Risks).
+const BADGE_WIDTH_RATIO = 0.4;
+const BADGE_HEIGHT_RATIO = 0.3;
+
+export async function cropBadge(imageBuffer: Buffer, frame: DetectedFrame): Promise<Buffer> {
+  const { width, height } = await sharp(imageBuffer).metadata();
+  if (!width || !height) {
+    throw new Error('cropBadge: could not read image dimensions');
+  }
+
+  const badgeLeftFraction = frame.x + frame.w * (1 - BADGE_WIDTH_RATIO);
+  const badgeTopFraction = frame.y + frame.h * (1 - BADGE_HEIGHT_RATIO);
+  const left = Math.max(0, Math.min(width - 1, Math.round(badgeLeftFraction * width)));
+  const top = Math.max(0, Math.min(height - 1, Math.round(badgeTopFraction * height)));
+  const cropWidth = Math.max(1, Math.min(width - left, Math.round(frame.w * BADGE_WIDTH_RATIO * width)));
+  const cropHeight = Math.max(1, Math.min(height - top, Math.round(frame.h * BADGE_HEIGHT_RATIO * height)));
+
+  return sharp(imageBuffer).extract({ left, top, width: cropWidth, height: cropHeight }).png().toBuffer();
+}
