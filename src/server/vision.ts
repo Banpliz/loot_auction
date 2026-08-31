@@ -128,6 +128,15 @@ const Y_DRIFT_MARGIN_RATIO = 0.04;
 // underlying box that's already too tall).
 const MAX_HEIGHT_TO_WIDTH_RATIO = 1.2;
 
+// Round 15: the height ceiling above stops a box from reaching too far DOWN into the next
+// row, but nothing stopped one from reaching too far RIGHT into the next icon in the same
+// row — live tests consistently showed a sliver of the neighboring icon inside the crop on
+// the right edge. Icons are never wider than they are tall (square at widest, per the
+// prompt's own description and the height ceiling above), so the same anchored-shrink trick
+// applies to width: clamp it to the icon's own (unclamped) height and keep the left edge
+// fixed, trimming any excess strictly off the right side where the bleed was reported.
+const MAX_WIDTH_TO_HEIGHT_RATIO = 1.0;
+
 // baseUrl defaults to Anthropic's own endpoint, but can be pointed at a wire-compatible
 // proxy (same x-api-key header, same /v1/messages request/response shape, just a
 // different domain) — some resellers front Anthropic's API this way, which is simpler to
@@ -243,13 +252,16 @@ function validateItem(raw: unknown, index: number): VisionLotItem {
   // exactly one thing seen live — the box reaching past the icon into the next panel
   // row's text — so clamp it down (anchored at the same top edge) rather than trust it.
   const clampedH = Math.min(item.h, item.w * MAX_HEIGHT_TO_WIDTH_RATIO);
+  // Anchored at the left edge (x unchanged), same reasoning as the height ceiling above —
+  // trims a too-wide box strictly off the right, which is where the bleed was reported.
+  const clampedW = Math.min(item.w, item.h * MAX_WIDTH_TO_HEIGHT_RATIO);
 
-  const marginX = item.w * SIDE_MARGIN_RATIO;
+  const marginX = clampedW * SIDE_MARGIN_RATIO;
   const marginTop = clampedH * TOP_MARGIN_RATIO + item.y * Y_DRIFT_MARGIN_RATIO;
   const marginBottom = clampedH * MARGIN_RATIO;
   const x = Math.max(0, item.x - marginX);
   const y = Math.max(0, item.y - marginTop);
-  const w = Math.min(1 - x, item.w + 2 * marginX);
+  const w = Math.min(1 - x, clampedW + 2 * marginX);
   const h = Math.min(1 - y, clampedH + marginTop + marginBottom);
 
   return { x, y, w, h, rarity: item.rarity, quantity: item.quantity };

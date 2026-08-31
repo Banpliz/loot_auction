@@ -93,6 +93,23 @@ describe('extractInvasionLoot', () => {
     expect(result.y).toBeCloseTo(0.2 - (0.12 * 0.3 + 0.2 * 0.04)); // top edge, height + y-drift margin
   });
 
+  it('clamps a too-wide box down to the max width-to-height ratio (bleeding into the next icon)', async () => {
+    mockFetchOnce({
+      ok: true,
+      json: async () => ({
+        // w = 0.3 against h = 0.1 is a 3x ratio — symptomatic of the box reaching past the
+        // icon into the next icon in the same row, which live tests showed really happens.
+        content: [{ type: 'tool_use', input: { items: [{ x: 0.2, y: 0.2, w: 0.3, h: 0.1, rarity: 'red', quantity: 1 }] } }],
+      }),
+    });
+
+    const [result] = await extractInvasionLoot(fakeImage, 'test-key');
+    // Clamped w (before margin) is h * 1.0 = 0.1 (round 15), anchored at the same left edge
+    // (x unchanged) so the excess is trimmed strictly off the right — the reported bleed.
+    expect(result.w).toBeLessThan(0.3);
+    expect(result.x).toBeCloseTo(0.2 - 0.1 * 0.03); // left edge barely moves (small side margin)
+  });
+
   it('clamps the margin expansion so a box near the image edge never exceeds 0..1', async () => {
     mockFetchOnce({
       ok: true,
