@@ -49,12 +49,17 @@ export interface VisionLotItem {
 // model already got right is trivial arithmetic, not something worth asking an LLM to do.
 //
 // Round 18: a live test returned phantom boxes over the bottom TAB BAR ("Трофеи / Данные
-// альянса / Данные боя") — solid-color or tab-label crops with no icon in them at all. This
-// is a content-selection miss, not a coordinate error: the ignore-list named the footer text
-// and the chat, but never named the tab bar itself, so the model had no reason to exclude
-// it. Named it explicitly rather than trying to fix this with geometry — this is exactly the
-// kind of miss round 4 already showed prompt wording fixes well (selection, not precision).
-const PROMPT = `Это скриншот экрана "Трофеи" из мобильной игры. На экране один светлый (кремовый/бежевый) прямоугольный ПАНЕЛЬ-блок со списком побеждённых боссов, каждый — отдельная строка внутри этой панели. Всё, что находится ВНЕ этой светлой панели (тёмный фон игры сверху/снизу/по краям экрана, чат альянса, любые всплывающие сообщения, подсказка «Нажмите на пустую область, чтобы закрыть», нижняя строка футера «Участники битвы альянсов могут торговаться за трофеи», НИЖНЯЯ ПАНЕЛЬ ВКЛАДОК с кнопками «Трофеи» / «Данные альянса» / «Данные боя») — полностью игнорируй, туда рамки не ставь.
+// альянса / Данные боя") — solid-color or tab-label crops with no icon in them at all. Named
+// it explicitly in the ignore-list, alongside the footer text and chat.
+//
+// Round 20 (reverting round 18): the very next live test came back almost entirely broken —
+// nearly every box across a whole batch landed on boss-name text, footer text, or tab-bar
+// fragments instead of icons, far worse than the single narrow miss round 18 targeted. The
+// prompt was already long and detailed; one more clause is the only content-affecting change
+// between a mostly-working batch and this near-total collapse, so it's the prime suspect —
+// reverted rather than risk compounding a guess on top of a guess. The tab-bar miss goes back
+// to being an occasional annoyance instead of a hypothesis that costs the whole prompt.
+const PROMPT = `Это скриншот экрана "Трофеи" из мобильной игры. На экране один светлый (кремовый/бежевый) прямоугольный ПАНЕЛЬ-блок со списком побеждённых боссов, каждый — отдельная строка внутри этой панели. Всё, что находится ВНЕ этой светлой панели (тёмный фон игры сверху/снизу/по краям экрана, чат альянса, любые всплывающие сообщения, подсказка «Нажмите на пустую область, чтобы закрыть», нижняя строка футера «Участники битвы альянсов могут торговаться за трофеи») — полностью игнорируй, туда рамки не ставь.
 
 Внутри панели, в каждой строке слева направо идёт:
 1. Круглый или щитовидный значок места (золотой/серебряный/бронзовый с цифрой 1/2/3, либо просто текст «Место 4») — это НЕ награда, никогда не включай его в ответ.
