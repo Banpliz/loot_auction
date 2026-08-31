@@ -1124,15 +1124,25 @@ The shared `beforeEach` event is `draft` as of Task 2, but claiming/unclaiming n
   });
 
   it('a user can claim two different lots that fall in different win-limit groups', async () => {
-    db.prepare("UPDATE events SET status = 'open' WHERE id = ?").run(eventId);
-    // itemA/itemB default to feast + category 'item' (see beforeEach) — put B in a
-    // different group so this actually exercises "different groups", not "same group
-    // twice" (which the limit test below covers instead).
-    db.prepare("UPDATE items SET category = 'stone' WHERE id = ?").run(itemBId);
+    // itemA/itemB's screenshot defaults to feast (see beforeEach), where category
+    // 'item' vs 'stone' are mutually exclusive (see the dedicated test below), so they
+    // can't stand in for "different, independent groups" here. Invasion's color groups
+    // (purple+red vs blue) aren't exclusive of each other, so use those instead.
+    const invasionEventId = db
+      .prepare("INSERT INTO events (title, status) VALUES ('Разные группы', 'open')")
+      .run().lastInsertRowid as number;
+    const screenshotId = db
+      .prepare("INSERT INTO screenshots (event_id, original_path, rows, template, uploaded_by) VALUES (?, ?, 1, 'invasion', 1)")
+      .run(invasionEventId, '/tmp/groups.png').lastInsertRowid as number;
+    const insertItem = db.prepare(
+      "INSERT INTO items (event_id, screenshot_id, name, image_path, status, color) VALUES (?, ?, ?, 'items/x.png', 'pool', ?)"
+    );
+    const purpleId = insertItem.run(invasionEventId, screenshotId, 'Purple', 'purple').lastInsertRowid as number;
+    const blueId = insertItem.run(invasionEventId, screenshotId, 'Blue', 'blue').lastInsertRowid as number;
 
-    const first = await app.inject({ method: 'POST', url: `/api/items/${itemAId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
+    const first = await app.inject({ method: 'POST', url: `/api/items/${purpleId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
     expect(first.statusCode).toBe(200);
-    const second = await app.inject({ method: 'POST', url: `/api/items/${itemBId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
+    const second = await app.inject({ method: 'POST', url: `/api/items/${blueId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
     expect(second.statusCode).toBe(200);
   });
 
