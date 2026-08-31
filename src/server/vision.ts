@@ -47,7 +47,14 @@ export interface VisionLotItem {
 // one step. Reverted the prompt to round 5's tight/snug framing and moved the margin to
 // a deterministic post-processing step in validateItem() instead — expanding a box the
 // model already got right is trivial arithmetic, not something worth asking an LLM to do.
-const PROMPT = `Это скриншот экрана "Трофеи" из мобильной игры. На экране один светлый (кремовый/бежевый) прямоугольный ПАНЕЛЬ-блок со списком побеждённых боссов, каждый — отдельная строка внутри этой панели. Всё, что находится ВНЕ этой светлой панели (тёмный фон игры сверху/снизу/по краям экрана, чат альянса, любые всплывающие сообщения, подсказка «Нажмите на пустую область, чтобы закрыть», нижняя строка футера «Участники битвы альянсов могут торговаться за трофеи») — полностью игнорируй, туда рамки не ставь.
+//
+// Round 18: a live test returned phantom boxes over the bottom TAB BAR ("Трофеи / Данные
+// альянса / Данные боя") — solid-color or tab-label crops with no icon in them at all. This
+// is a content-selection miss, not a coordinate error: the ignore-list named the footer text
+// and the chat, but never named the tab bar itself, so the model had no reason to exclude
+// it. Named it explicitly rather than trying to fix this with geometry — this is exactly the
+// kind of miss round 4 already showed prompt wording fixes well (selection, not precision).
+const PROMPT = `Это скриншот экрана "Трофеи" из мобильной игры. На экране один светлый (кремовый/бежевый) прямоугольный ПАНЕЛЬ-блок со списком побеждённых боссов, каждый — отдельная строка внутри этой панели. Всё, что находится ВНЕ этой светлой панели (тёмный фон игры сверху/снизу/по краям экрана, чат альянса, любые всплывающие сообщения, подсказка «Нажмите на пустую область, чтобы закрыть», нижняя строка футера «Участники битвы альянсов могут торговаться за трофеи», НИЖНЯЯ ПАНЕЛЬ ВКЛАДОК с кнопками «Трофеи» / «Данные альянса» / «Данные боя») — полностью игнорируй, туда рамки не ставь.
 
 Внутри панели, в каждой строке слева направо идёт:
 1. Круглый или щитовидный значок места (золотой/серебряный/бронзовый с цифрой 1/2/3, либо просто текст «Место 4») — это НЕ награда, никогда не включай его в ответ.
