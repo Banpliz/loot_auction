@@ -81,8 +81,16 @@ const PROMPT = `Это скриншот экрана "Трофеи" из моб�
 // blank panel space above the icon before it starts, icon squeezed toward the bottom of
 // the crop. Adding a full-size top margin on top of that made it worse, so the top gets
 // a smaller margin than the other three sides instead of matching them.
+//
+// Round 11: round 8 overcorrected — live tests now show the opposite problem, the top of
+// the icon itself getting cut off (worse on later lots in the same batch), plus the crop
+// reaching sideways into the next icon in the same row. The two get separate constants
+// because rows have real empty panel gap between them (room to pad top/bottom safely) but
+// icons within one row sit close together (little room to pad sideways without touching
+// the neighbor) — one shared ratio for both directions was never going to fit both cases.
 const MARGIN_RATIO = 0.08;
-const TOP_MARGIN_RATIO = 0.03;
+const SIDE_MARGIN_RATIO = 0.03;
+const TOP_MARGIN_RATIO = 0.07;
 
 // Round 9: pure prompt wording turned out unstable run-to-run — fixing "too much blank
 // space above" (round 8) brought back "bleeds into the next row's text" (round 5's bug)
@@ -213,7 +221,7 @@ function validateItem(raw: unknown, index: number): VisionLotItem {
   // row's text — so clamp it down (anchored at the same top edge) rather than trust it.
   const clampedH = Math.min(item.h, item.w * MAX_HEIGHT_TO_WIDTH_RATIO);
 
-  const marginX = item.w * MARGIN_RATIO;
+  const marginX = item.w * SIDE_MARGIN_RATIO;
   const marginTop = clampedH * TOP_MARGIN_RATIO;
   const marginBottom = clampedH * MARGIN_RATIO;
   const x = Math.max(0, item.x - marginX);

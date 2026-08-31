@@ -37,17 +37,17 @@ describe('extractInvasionLoot', () => {
     });
 
     const result = await extractInvasionLoot(fakeImage, 'test-key');
-    // Expanded by the asymmetric margin applied post-validation (see MARGIN_RATIO /
-    // TOP_MARGIN_RATIO in vision.ts): marginX = 0.1*0.08 = 0.008, marginTop = 0.1*0.03 =
-    // 0.003, marginBottom = 0.1*0.08 = 0.008. x shrinks by marginX, y shrinks by the
-    // smaller marginTop, w grows by 2*marginX, h grows by marginTop+marginBottom.
+    // Expanded by the asymmetric margin applied post-validation (see SIDE_MARGIN_RATIO /
+    // TOP_MARGIN_RATIO / MARGIN_RATIO in vision.ts, round 11): marginX = 0.1*0.03 = 0.003,
+    // marginTop = 0.1*0.07 = 0.007, marginBottom = 0.1*0.08 = 0.008. x shrinks by marginX,
+    // y shrinks by marginTop, w grows by 2*marginX, h grows by marginTop+marginBottom.
     // toBeCloseTo for the floating-point fields — plain toEqual is exact-equality and
-    // flaky against binary floating-point rounding (e.g. 0.003 + 0.008 !== 0.011 exactly).
+    // flaky against binary floating-point rounding.
     expect(result).toHaveLength(1);
-    expect(result[0].x).toBeCloseTo(0.092);
-    expect(result[0].y).toBeCloseTo(0.197);
-    expect(result[0].w).toBeCloseTo(0.116);
-    expect(result[0].h).toBeCloseTo(0.111);
+    expect(result[0].x).toBeCloseTo(0.097);
+    expect(result[0].y).toBeCloseTo(0.193);
+    expect(result[0].w).toBeCloseTo(0.106);
+    expect(result[0].h).toBeCloseTo(0.115);
     expect(result[0].rarity).toBe('purple');
     expect(result[0].quantity).toBe(2);
 
@@ -85,7 +85,7 @@ describe('extractInvasionLoot', () => {
     // Clamped h (before margin) is w * 1.2 = 0.12 (round 10: tightened from 1.4), then the
     // usual top/bottom margins are added on top of that clamped value, not the original 0.3.
     expect(result.h).toBeLessThan(0.2);
-    expect(result.y).toBeCloseTo(0.2 - 0.12 * 0.03); // top edge barely moves (small top margin)
+    expect(result.y).toBeCloseTo(0.2 - 0.12 * 0.07); // top edge (round 11: larger top margin)
   });
 
   it('clamps the margin expansion so a box near the image edge never exceeds 0..1', async () => {
@@ -97,8 +97,8 @@ describe('extractInvasionLoot', () => {
     });
 
     const [result] = await extractInvasionLoot(fakeImage, 'test-key');
-    // Unpadded margin would push x/y to 0.01 - 0.008 = 0.002 (fine, > 0), but confirms
-    // the clamp never goes negative even this close to the edge.
+    // Unpadded margin would push x/y slightly negative here without the clamp — confirms
+    // it never goes negative even this close to the edge.
     expect(result.x).toBeGreaterThanOrEqual(0);
     expect(result.y).toBeGreaterThanOrEqual(0);
     expect(result.x + result.w).toBeLessThanOrEqual(1);
