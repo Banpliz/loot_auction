@@ -89,7 +89,13 @@ const TOP_MARGIN_RATIO = 0.03;
 // for some icons in the same batch. Rather than keep chasing wording, enforce the one
 // geometric fact we already know for certain (icons are roughly square, at most ~1.3x
 // taller than wide) as a hard code-level ceiling instead of a prompt suggestion.
-const MAX_HEIGHT_TO_WIDTH_RATIO = 1.4;
+//
+// Round 10: a live test on 1.4 still showed some crops reaching past the icon into the
+// next row's boss-name text — 1.4 was too loose a ceiling. Icon+label is realistically
+// closer to 1.2x taller than wide; tightened the ratio itself rather than touching
+// margins (margins apply on top of this clamp, so loosening them can't fix an
+// underlying box that's already too tall).
+const MAX_HEIGHT_TO_WIDTH_RATIO = 1.2;
 
 // baseUrl defaults to Anthropic's own endpoint, but can be pointed at a wire-compatible
 // proxy (same x-api-key header, same /v1/messages request/response shape, just a

@@ -82,10 +82,10 @@ describe('extractInvasionLoot', () => {
     });
 
     const [result] = await extractInvasionLoot(fakeImage, 'test-key');
-    // Clamped h (before margin) is w * 1.4 = 0.14, then the usual top/bottom margins are
-    // added on top of that clamped value, not the original 0.3.
+    // Clamped h (before margin) is w * 1.2 = 0.12 (round 10: tightened from 1.4), then the
+    // usual top/bottom margins are added on top of that clamped value, not the original 0.3.
     expect(result.h).toBeLessThan(0.2);
-    expect(result.y).toBeCloseTo(0.2 - 0.14 * 0.03); // top edge barely moves (small top margin)
+    expect(result.y).toBeCloseTo(0.2 - 0.12 * 0.03); // top edge barely moves (small top margin)
   });
 
   it('clamps the margin expansion so a box near the image edge never exceeds 0..1', async () => {
