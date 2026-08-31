@@ -5,8 +5,17 @@ import sharp from 'sharp';
 // difference. Calibrated against a real screenshot with genuine duplicate rows
 // (2026-08-27): same item ~1.4-2.1, different items ~20-22, even after the
 // client's JPEG re-compression — a threshold of 8 leaves a wide margin both ways.
+//
+// That calibration was against feast's fixed pixel-grid slicer, where every crop of a
+// given cell uses the exact same box every time. Invasion's vision-detected crops don't:
+// each icon's box comes from a fresh Claude call and its margin/size varies a bit instance
+// to instance (see vision.ts) — the same icon can end up with a different amount of
+// surrounding panel background, or a slightly different zoom level, each time it's cut.
+// That framing noise was pushing genuine invasion duplicates well past 8, so they showed
+// up as separate lots instead of merging — confirmed live 2026-09-01. Raised the threshold
+// to give that framing variance headroom while staying comfortably under "different items".
 const SIGNATURE_SIZE = 16;
-const SAME_ITEM_THRESHOLD = 8;
+const SAME_ITEM_THRESHOLD = 16;
 
 export type IconSignature = Buffer;
 
