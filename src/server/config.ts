@@ -6,6 +6,7 @@ export interface Config {
   port: number;
   dataDir: string;
   miniAppUrl: string;
+  anthropicApiKey?: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -24,5 +25,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       .filter((n) => Number.isFinite(n) && n > 0),
     port: Number(env.PORT ?? 3000),
     dataDir: path.resolve(env.DATA_DIR ?? 'data'),
+    anthropicApiKey: env.ANTHROPIC_API_KEY || undefined,
   };
 }

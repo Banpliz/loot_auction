@@ -5,4 +5,5 @@ export interface AppDeps {
   botToken: string;
   adminTelegramIds: number[];
   dataDir: string;
+  anthropicApiKey?: string;
 }
