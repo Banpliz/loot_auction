@@ -92,8 +92,8 @@ VPS это не так критично, но `npm install` там гонять 
 uploaded_by), `items` (event_id, screenshot_id, color, category, quantity,
 image_path, status), `claims`, `item_winners` (item_id, telegram_id — лот с
 quantity > 1 разыгрывает несколько разных победителей из тех, кто на него
-ставил), `lot_library` (icon_signature, name, category — см. отдельный
-раздел ниже). `price` в `items` — мёртвая колонка с дефолтом, никем не
+ставил; мёртвая таблица при FCFS, см. раздел выше), `lot_library`
+(icon_signature, name, category — см. отдельный раздел ниже). `price` в `items` — мёртвая колонка с дефолтом, никем не
 читается; `name` теперь живая (ручная пометка + автоподстановка из
 lot_library). Таблиц `settings`/`price_tiers`/`catalog_items` больше нет.
 

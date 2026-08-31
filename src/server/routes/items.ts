@@ -189,8 +189,11 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
         return;
       }
 
-      deps.db.prepare('UPDATE items SET quantity = quantity + ? WHERE id = ?').run(source.quantity, targetId);
-      deps.db.prepare("UPDATE items SET status = 'removed' WHERE id = ?").run(sourceId);
+      const mergeItems = deps.db.transaction(() => {
+        deps.db.prepare('UPDATE items SET quantity = quantity + ? WHERE id = ?').run(source.quantity, targetId);
+        deps.db.prepare("UPDATE items SET status = 'removed' WHERE id = ?").run(sourceId);
+      });
+      mergeItems();
 
       return { ok: true };
     }
@@ -248,12 +251,17 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
     }
 
     // Claiming a lot immediately reserves one unit of it — first come, first served —
-    // instead of just registering interest for a later random draw.
-    deps.db.prepare('INSERT INTO claims (item_id, telegram_id) VALUES (?, ?)').run(itemId, userId);
-    const remaining = item.quantity - 1;
-    deps.db
-      .prepare('UPDATE items SET quantity = ?, status = ? WHERE id = ?')
-      .run(remaining, remaining <= 0 ? 'auctioned' : 'pool', itemId);
+    // instead of just registering interest for a later random draw. Wrapped in a
+    // transaction so a crash between the two writes can't leave a claim row without
+    // the matching stock decrement (or vice versa).
+    const claimUnit = deps.db.transaction(() => {
+      deps.db.prepare('INSERT INTO claims (item_id, telegram_id) VALUES (?, ?)').run(itemId, userId);
+      const remaining = item.quantity - 1;
+      deps.db
+        .prepare('UPDATE items SET quantity = ?, status = ? WHERE id = ?')
+        .run(remaining, remaining <= 0 ? 'auctioned' : 'pool', itemId);
+    });
+    claimUnit();
 
     return { ok: true };
   });
@@ -273,12 +281,15 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
       }
     }
 
-    const result = deps.db.prepare('DELETE FROM claims WHERE item_id = ? AND telegram_id = ?').run(itemId, userId);
-    if (result.changes > 0 && item) {
-      // Giving the unit back always returns the lot to 'pool', even if claiming it was
-      // what had taken it to 'auctioned' (sold out) — the quantity math is symmetric.
-      deps.db.prepare("UPDATE items SET quantity = quantity + 1, status = 'pool' WHERE id = ?").run(itemId);
-    }
+    const unclaimUnit = deps.db.transaction(() => {
+      const result = deps.db.prepare('DELETE FROM claims WHERE item_id = ? AND telegram_id = ?').run(itemId, userId);
+      if (result.changes > 0 && item) {
+        // Giving the unit back always returns the lot to 'pool', even if claiming it was
+        // what had taken it to 'auctioned' (sold out) — the quantity math is symmetric.
+        deps.db.prepare("UPDATE items SET quantity = quantity + 1, status = 'pool' WHERE id = ?").run(itemId);
+      }
+    });
+    unclaimUnit();
     return { ok: true };
   });
 }

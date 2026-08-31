@@ -176,15 +176,15 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
     { preHandler: requireAdmin(deps) },
     async (request, reply) => {
       const eventId = Number(request.params.id);
-      const durationMinutes = request.body?.durationMinutes;
-      if (!Number.isFinite(durationMinutes) || (durationMinutes as number) <= 0) {
-        reply.code(400).send({ error: 'durationMinutes must be a positive number' });
-        return;
-      }
-
       const event = deps.db.prepare('SELECT status FROM events WHERE id = ?').get(eventId) as { status: string } | undefined;
       if (!event) {
         reply.code(404).send({ error: 'event not found' });
+        return;
+      }
+
+      const durationMinutes = request.body?.durationMinutes;
+      if (!Number.isFinite(durationMinutes) || (durationMinutes as number) <= 0) {
+        reply.code(400).send({ error: 'durationMinutes must be a positive number' });
         return;
       }
       if (event.status !== 'draft') {
