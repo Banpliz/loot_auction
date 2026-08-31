@@ -156,14 +156,23 @@ export function registerScreenshotRoutes(app: FastifyInstance, deps: AppDeps) {
       // The same item often appears more than once (a common drop, or split across two
       // boss rows) — grouping identical-looking icons into one lot with a quantity,
       // instead of one lot per icon, is the whole point of this endpoint; see dedup.ts
-      // for how "identical-looking" is decided and its one known blind spot (two
-      // different items that share the exact same icon art, like a chest whose graphic
-      // doesn't change between tiers, still merge).
+      // for how "identical-looking" is decided.
       const withSignatures = await Promise.all(
         candidates.map(async (c) => ({ signature: await computeIconSignature(c.imagePath), value: c }))
       );
       const signatureByPath = new Map(withSignatures.map((s) => [s.value.imagePath, s.signature]));
-      const groups = groupBySignature<LotCandidate>(withSignatures as { signature: IconSignature; value: LotCandidate }[]);
+
+      // The generic chest icon reuses the exact same art regardless of what's actually
+      // inside it, so two chests that merely LOOK identical can be genuinely different
+      // lots — grouping them together within one upload would silently hide one. Already
+      // excluded from cross-upload matching below for the same reason; chests now skip
+      // groupBySignature entirely and each becomes its own singleton group instead.
+      const chestEntries = withSignatures.filter((s) => isGenericChestIcon(s.signature));
+      const nonChestEntries = withSignatures.filter((s) => !isGenericChestIcon(s.signature));
+      const groups: LotCandidate[][] = [
+        ...groupBySignature<LotCandidate>(nonChestEntries as { signature: IconSignature; value: LotCandidate }[]),
+        ...chestEntries.map((s) => [s.value]),
+      ];
 
       // Дубли бьют не только внутри одной загрузки, но и между отдельными
       // выгрузками скриншотов (тот же лот попал на два разных скрина) — поэтому
