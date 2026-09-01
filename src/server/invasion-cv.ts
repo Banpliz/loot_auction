@@ -40,9 +40,14 @@ const RARITY_COLOR_TOLERANCE = 55;
 // icon) than an actual panel.
 const MIN_PANEL_HEIGHT_RATIO = 0.25;
 
-// Filters single-pixel/anti-aliasing color noise out of the connected-component pass — a
-// real icon frame is a meaningful fraction of the image, never a handful of pixels.
-const MIN_FRAME_AREA_RATIO = 0.0008;
+// Round 6: raised from 0.0008 after round 5's per-candidate logging caught the actual
+// culprit behind the place/rank badge surviving round 4's position filter — it isn't near
+// the left edge (x=0.169, safely inside the "reward" zone), it's just much SMALLER than a
+// real icon. Live data on one screenshot: badge bbox 53x39=2067px vs. real icons ranging
+// ~66x90=5940px to ~93x91=8463px — a clear size gap. Retuned to sit roughly in the middle
+// of that gap (old ratio implied a ~2583000px image, badge=0.0008, smallest real icon
+// ≈0.0023 — 0.0014 lands well clear of both with margin on either side).
+const MIN_FRAME_AREA_RATIO = 0.0014;
 
 // Icon frames are roughly square. Anything egregiously off square is two touching frames
 // flood-filled into one component (or other noise), not a real icon.
@@ -58,11 +63,12 @@ const MAX_FRAME_ASPECT_RATIO = 1.5;
 // Round 4: the round 1 widened rarity tolerance (needed for the real blue gradient) also
 // started matching the circular place/rank badge (gold "1" / silver "2" / bronze "3") — a
 // live test showed one detected "frame" that was actually just the rank medal, not a
-// reward. Rather than narrow the tolerance back down (risking the ring-detection problem
-// round 1 fixed), use the one structural fact that's been true in every real screenshot
-// seen all session: the place badge always sits at the very start of a row, while reward
-// icons are always right-aligned after the boss name. A component whose left edge is still
-// in the panel's leftmost margin is the badge, not a reward — drop it.
+// reward. Guessed the badge sat in the panel's left margin (true in every real screenshot
+// seen during design) and filtered on that — round 5's per-candidate logging showed this
+// guess was wrong: the badge was at x=0.169, well inside this "safe" zone (see round 6's
+// MIN_FRAME_AREA_RATIO fix below for the actual cause, which was size, not position). Kept
+// as a harmless second guard — no real icon has ever been logged this close to the edge —
+// but it is NOT what's currently keeping the badge out; don't assume it does the job alone.
 const MIN_FRAME_X_RATIO = 0.12;
 
 type RawPixels = { data: Buffer; width: number; height: number; channels: number };
