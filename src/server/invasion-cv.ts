@@ -69,11 +69,25 @@ async function readRawRgb(imageBuffer: Buffer): Promise<RawPixels> {
 // Finds the largest contiguous vertical span of rows that are mostly the panel's cream
 // color. Returns pixel bounds, or null if nothing large enough matches.
 // Round 2: bumped from a fixed 0.5 to a tunable constant while diagnosing why detection
-// still wasn't firing after round 1's color recalibration — the failure mode as of round 1
-// was unconfirmed (bad color reference vs. too-strict row threshold vs. something else),
-// and this needs to be tunable independently of PANEL_COLOR_TOLERANCE to isolate which one
-// is actually at fault from live diagnostic logging (see detectInvasionFrames below).
-const PANEL_ROW_MATCH_THRESHOLD = 0.5;
+// still wasn't firing after round 1's color recalibration.
+//
+// Round 3: live diagnostics from round 2 (a real 2348px-tall screenshot) showed the actual
+// problem — 1053/2348 rows individually passed >50%, way more than the ~587 needed for
+// MIN_PANEL_HEIGHT_RATIO, but scattered into short runs instead of one long one. The panel
+// is a LIST: rows dense with an icon, a place badge, and boss-name text legitimately have
+// LESS background than an empty row, so a handful of content-heavy rows dipping under the
+// threshold breaks contiguity right where the reward icons actually are — the exact rows
+// this whole pipeline needs to see. Lowered the threshold (content-heavy rows still have
+// plenty of background around/between elements) and added gap-bridging below: a short run
+// of non-passing rows sandwiched between passing ones is treated as still-inside-the-panel,
+// since a real gap between the panel and the dark game background outside it would be much
+// taller than one content-dense row ever is.
+const PANEL_ROW_MATCH_THRESHOLD = 0.3;
+
+// A single boss row (icon + badge + text) is the tallest thing that should ever look like a
+// "gap" from the row-color scan alone — estimated generously relative to image height so it
+// comfortably bridges one dense row without also bridging a genuine exit from the panel.
+const MAX_PANEL_GAP_RATIO = 0.06;
 
 function findPanelBounds(pixels: RawPixels): { top: number; bottom: number } | null {
   const { data, width, height, channels } = pixels;
@@ -93,20 +107,35 @@ function findPanelBounds(pixels: RawPixels): { top: number; bottom: number } | n
     rowIsPanel[y] = fraction > PANEL_ROW_MATCH_THRESHOLD;
     if (rowIsPanel[y]) rowsAboveThreshold++;
   }
-  // Round 2 diagnostic — see the comment on PANEL_ROW_MATCH_THRESHOLD. Tells us whether a
-  // failure is "color reference still wrong" (maxRowMatchFraction near 0) or "threshold too
-  // strict for how much of a real row is actually background" (maxRowMatchFraction close to
-  // but under 0.5, with many rows just barely missing).
+
+  // Bridge short gaps (content-dense rows) between two panel runs before measuring the
+  // longest contiguous span — a separate pass so the raw per-row diagnostic above still
+  // reflects the unbridged truth.
+  const maxGapRows = Math.round(height * MAX_PANEL_GAP_RATIO);
+  const bridged = rowIsPanel.slice();
+  let gapStart = -1;
+  for (let y = 0; y < height; y++) {
+    if (!bridged[y]) {
+      if (gapStart === -1) gapStart = y;
+    } else if (gapStart !== -1) {
+      if (gapStart > 0 && y - gapStart <= maxGapRows) {
+        for (let g = gapStart; g < y; g++) bridged[g] = true;
+      }
+      gapStart = -1;
+    }
+  }
+
   console.log(
     `findPanelBounds: best single-row match ${(maxRowMatchFraction * 100).toFixed(1)}% ` +
-      `(need >${(PANEL_ROW_MATCH_THRESHOLD * 100).toFixed(0)}%), ${rowsAboveThreshold}/${height} rows passed`
+      `(need >${(PANEL_ROW_MATCH_THRESHOLD * 100).toFixed(0)}%), ${rowsAboveThreshold}/${height} rows passed, ` +
+      `gap bridge <= ${maxGapRows}px`
   );
 
   let bestStart = -1;
   let bestLength = 0;
   let currentStart = -1;
   for (let y = 0; y < height; y++) {
-    if (rowIsPanel[y]) {
+    if (bridged[y]) {
       if (currentStart === -1) currentStart = y;
     } else if (currentStart !== -1) {
       const length = y - currentStart;
@@ -121,6 +150,11 @@ function findPanelBounds(pixels: RawPixels): { top: number; bottom: number } | n
     bestLength = height - currentStart;
     bestStart = currentStart;
   }
+
+  console.log(
+    `findPanelBounds: longest contiguous (bridged) run ${bestLength}px = ${((bestLength / height) * 100).toFixed(1)}% ` +
+      `of height (need >=${(MIN_PANEL_HEIGHT_RATIO * 100).toFixed(0)}%)`
+  );
 
   if (bestStart === -1 || bestLength / height < MIN_PANEL_HEIGHT_RATIO) return null;
   return { top: bestStart, bottom: bestStart + bestLength };
