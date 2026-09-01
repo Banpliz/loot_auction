@@ -5,7 +5,7 @@
 //
 // Usage: node scripts/color-histogram.js path/to/screenshot.png [topN]
 
-const sharp = require('sharp');
+import sharp from 'sharp';
 
 const [, , imagePath, topNArg] = process.argv;
 if (!imagePath) {
