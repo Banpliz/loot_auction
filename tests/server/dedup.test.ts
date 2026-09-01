@@ -3,7 +3,7 @@ import sharp from 'sharp';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { computeIconSignature, groupBySignature, isGenericChestIcon, CHEST_REFERENCE_SIGNATURE } from '../../src/server/dedup';
+import { computeIconSignature, groupBySignature, isGenericChestIcon, CHEST_REFERENCE_SIGNATURES } from '../../src/server/dedup';
 
 describe('dedup', () => {
   let tmpDir: string;
@@ -62,14 +62,19 @@ describe('dedup', () => {
     ]);
   });
 
-  it('recognizes the generic reward-chest icon by its reference signature', async () => {
-    const chestPath = path.join(tmpDir, 'chest.png');
-    // Rebuild a PNG straight from the reference's own raw pixels so the round
-    // trip through computeIconSignature (resize 16x16 fill) is a no-op and
-    // reproduces the reference exactly.
-    await sharp(CHEST_REFERENCE_SIGNATURE, { raw: { width: 16, height: 16, channels: 3 } }).png().toFile(chestPath);
-    const signature = await computeIconSignature(chestPath);
-    expect(isGenericChestIcon(signature)).toBe(true);
+  it('recognizes the generic reward-chest icon by any of its per-rarity reference signatures', async () => {
+    // Round 2026-09-01: one reference isn't enough — a real purple chest and a real blue
+    // chest crop don't fall within SAME_ITEM_THRESHOLD of each other (different rarity
+    // border color), so isGenericChestIcon has to check every reference, not just one.
+    for (const [i, reference] of CHEST_REFERENCE_SIGNATURES.entries()) {
+      const chestPath = path.join(tmpDir, `chest-${i}.png`);
+      // Rebuild a PNG straight from the reference's own raw pixels so the round trip
+      // through computeIconSignature (resize 16x16 fill) is a no-op and reproduces the
+      // reference exactly.
+      await sharp(reference, { raw: { width: 16, height: 16, channels: 3 } }).png().toFile(chestPath);
+      const signature = await computeIconSignature(chestPath);
+      expect(isGenericChestIcon(signature)).toBe(true);
+    }
   });
 
   it('does not flag unrelated icons as the generic chest', async () => {
