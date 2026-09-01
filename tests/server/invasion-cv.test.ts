@@ -61,8 +61,11 @@ describe('detectInvasionFrames', () => {
   });
 
   it('detects multiple frames of different rarities, left to right', async () => {
+    // left=25 (not 0-ish) deliberately keeps this frame outside MIN_FRAME_X_RATIO's
+    // left-margin exclusion zone (round 4) — that zone exists to drop the place/rank badge,
+    // not a real reward icon, and this fixture represents a real icon.
     const image = await buildImage(150, 200, { top: 20, bottom: 180 }, [
-      { left: 10, top: 50, width: 20, height: 20, color: BLUE },
+      { left: 25, top: 50, width: 20, height: 20, color: BLUE },
       { left: 60, top: 50, width: 20, height: 20, color: PURPLE },
       { left: 110, top: 50, width: 20, height: 20, color: RED },
     ]);

@@ -55,6 +55,16 @@ const MIN_FRAME_AREA_RATIO = 0.0008;
 // catches every case the finding is about with real headroom above plausible icon shapes.
 const MAX_FRAME_ASPECT_RATIO = 1.5;
 
+// Round 4: the round 1 widened rarity tolerance (needed for the real blue gradient) also
+// started matching the circular place/rank badge (gold "1" / silver "2" / bronze "3") — a
+// live test showed one detected "frame" that was actually just the rank medal, not a
+// reward. Rather than narrow the tolerance back down (risking the ring-detection problem
+// round 1 fixed), use the one structural fact that's been true in every real screenshot
+// seen all session: the place badge always sits at the very start of a row, while reward
+// icons are always right-aligned after the boss name. A component whose left edge is still
+// in the panel's leftmost margin is the badge, not a reward — drop it.
+const MIN_FRAME_X_RATIO = 0.12;
+
 type RawPixels = { data: Buffer; width: number; height: number; channels: number };
 
 function colorDistance(a: readonly [number, number, number], b: readonly [number, number, number]): number {
@@ -236,6 +246,9 @@ function findFrames(pixels: RawPixels, panelTop: number, panelBottom: number): D
       // any rarity color", not "is this the same icon"), or some other non-icon blob —
       // either way it's not one real frame, so drop just this component and keep going.
       if (bboxWidth > bboxHeight * MAX_FRAME_ASPECT_RATIO || bboxHeight > bboxWidth * MAX_FRAME_ASPECT_RATIO) continue;
+
+      // The place/rank badge, not a reward icon — see MIN_FRAME_X_RATIO above.
+      if (minX / width < MIN_FRAME_X_RATIO) continue;
 
       let rarity: RarityColor = 'blue';
       let bestCount = -1;
