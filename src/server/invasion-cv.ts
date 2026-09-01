@@ -1,5 +1,5 @@
 import sharp from 'sharp';
-import { REFERENCE_COLORS, type RarityColor } from './color-detect';
+import type { RarityColor } from './color-detect';
 
 export interface DetectedFrame {
   x: number;
@@ -9,16 +9,31 @@ export interface DetectedFrame {
   rarity: RarityColor;
 }
 
-// Estimated from screenshots seen 2026-09-01/02 — the "Трофеи" panel's light cream/beige
-// background. Not independently calibrated against a large sample; retune here if live
-// testing shows the panel isn't being found (see Open Risks in the design doc).
-const PANEL_REFERENCE_COLOR: [number, number, number] = [237, 224, 196];
-const PANEL_COLOR_TOLERANCE = 28;
+// Round 1 (2026-09-02): the initial estimate ([237,224,196], tolerance 28) never fired on a
+// live screenshot — a real color histogram taken from an actual uploaded screenshot
+// (scripts/color-histogram.js) showed the panel isn't one flat cream color: it's a
+// two-tone row-striping pattern, dominant clusters at [224,208,192] (17.1% of the image)
+// and [240,224,208] (12.95%), plus a lighter ~8.8% cluster (likely a header/edge area).
+// Recentered on the midpoint of the two striping tones, with tolerance widened enough to
+// cover all three real clusters — the nearest non-panel color in that same histogram (dark
+// background clusters around [32,32,48]) is ~200+ units away, so there's no risk of this
+// wider tolerance matching anything else.
+const PANEL_REFERENCE_COLOR: [number, number, number] = [232, 216, 200];
+const PANEL_COLOR_TOLERANCE = 45;
 
-// Invasion's frames look visually identical to feast's (same game, same rarity palette),
-// but were never independently sampled — reusing feast's calibrated values as a starting
-// point, not a guarantee (see design doc's Open Risks).
-const RARITY_COLOR_TOLERANCE = 40;
+// Round 1: invasion's rarity frames are NOT flat-colored like feast's — the same histogram
+// showed blue frame pixels spread across a real gradient ([64,112,192] through
+// [128,176,224], a beveled/lit render, not a solid fill), so feast's single calibrated
+// value (imported from color-detect.ts) was too narrow a target. Invasion now keeps its own
+// reference colors instead of sharing feast's, recentered on the observed blue range's
+// midpoint. Purple/red are still feast's original values — no real invasion sample of
+// either color existed at calibration time; retune here the same way once one does.
+const RARITY_REFERENCE_COLORS: Record<RarityColor, [number, number, number]> = {
+  blue: [92, 148, 212],
+  purple: [156, 74, 201],
+  red: [209, 67, 78],
+};
+const RARITY_COLOR_TOLERANCE = 55;
 
 // A real panel spans most of the screenshot's height in every real example seen this
 // session — a smaller match is more likely a false positive (a chat bubble, an unrelated
@@ -100,7 +115,7 @@ function findPanelBounds(pixels: RawPixels): { top: number; bottom: number } | n
 function findFrames(pixels: RawPixels, panelTop: number, panelBottom: number): DetectedFrame[] {
   const { data, width, height, channels } = pixels;
   const rarityLabels: (RarityColor | null)[] = new Array(width * height).fill(null);
-  const colorEntries = Object.entries(REFERENCE_COLORS) as [RarityColor, [number, number, number]][];
+  const colorEntries = Object.entries(RARITY_REFERENCE_COLORS) as [RarityColor, [number, number, number]][];
 
   for (let y = panelTop; y < panelBottom; y++) {
     for (let x = 0; x < width; x++) {
@@ -195,9 +210,19 @@ function findFrames(pixels: RawPixels, panelTop: number, panelBottom: number): D
 export async function detectInvasionFrames(imageBuffer: Buffer): Promise<DetectedFrame[] | null> {
   const pixels = await readRawRgb(imageBuffer);
   const panel = findPanelBounds(pixels);
-  if (!panel) return null;
+  // Round 1: logged unconditionally (not just on failure) — the FIRST live test after this
+  // round's recalibration needs to confirm the panel/frame counts look right, not just
+  // whether the pipeline fired at all. Downgrade to failure-only once this is proven stable.
+  if (!panel) {
+    console.log('detectInvasionFrames: panel not found — falling back to extractInvasionLoot');
+    return null;
+  }
+  console.log(
+    `detectInvasionFrames: panel found at y=${(panel.top / pixels.height).toFixed(2)}..${(panel.bottom / pixels.height).toFixed(2)} of image height`
+  );
 
   const frames = findFrames(pixels, panel.top, panel.bottom);
+  console.log(`detectInvasionFrames: found ${frames.length} icon frame(s)`);
   if (frames.length === 0) return null;
 
   return frames;
