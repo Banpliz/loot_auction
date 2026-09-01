@@ -68,9 +68,18 @@ async function readRawRgb(imageBuffer: Buffer): Promise<RawPixels> {
 
 // Finds the largest contiguous vertical span of rows that are mostly the panel's cream
 // color. Returns pixel bounds, or null if nothing large enough matches.
+// Round 2: bumped from a fixed 0.5 to a tunable constant while diagnosing why detection
+// still wasn't firing after round 1's color recalibration — the failure mode as of round 1
+// was unconfirmed (bad color reference vs. too-strict row threshold vs. something else),
+// and this needs to be tunable independently of PANEL_COLOR_TOLERANCE to isolate which one
+// is actually at fault from live diagnostic logging (see detectInvasionFrames below).
+const PANEL_ROW_MATCH_THRESHOLD = 0.5;
+
 function findPanelBounds(pixels: RawPixels): { top: number; bottom: number } | null {
   const { data, width, height, channels } = pixels;
   const rowIsPanel: boolean[] = new Array(height);
+  let maxRowMatchFraction = 0;
+  let rowsAboveThreshold = 0;
   for (let y = 0; y < height; y++) {
     let matchCount = 0;
     for (let x = 0; x < width; x++) {
@@ -79,8 +88,19 @@ function findPanelBounds(pixels: RawPixels): { top: number; bottom: number } | n
         matchCount++;
       }
     }
-    rowIsPanel[y] = matchCount / width > 0.5;
+    const fraction = matchCount / width;
+    if (fraction > maxRowMatchFraction) maxRowMatchFraction = fraction;
+    rowIsPanel[y] = fraction > PANEL_ROW_MATCH_THRESHOLD;
+    if (rowIsPanel[y]) rowsAboveThreshold++;
   }
+  // Round 2 diagnostic — see the comment on PANEL_ROW_MATCH_THRESHOLD. Tells us whether a
+  // failure is "color reference still wrong" (maxRowMatchFraction near 0) or "threshold too
+  // strict for how much of a real row is actually background" (maxRowMatchFraction close to
+  // but under 0.5, with many rows just barely missing).
+  console.log(
+    `findPanelBounds: best single-row match ${(maxRowMatchFraction * 100).toFixed(1)}% ` +
+      `(need >${(PANEL_ROW_MATCH_THRESHOLD * 100).toFixed(0)}%), ${rowsAboveThreshold}/${height} rows passed`
+  );
 
   let bestStart = -1;
   let bestLength = 0;
