@@ -241,14 +241,28 @@ function findFrames(pixels: RawPixels, panelTop: number, panelBottom: number): D
       const bboxHeight = maxY - minY + 1;
       if (bboxWidth * bboxHeight < minArea) continue;
 
+      // Round 5 diagnostic: everything past this point is a component big enough to plausibly
+      // be either a real icon or the place badge — logging its geometry and which filter (if
+      // any) drops it replaces guessing at MIN_FRAME_X_RATIO with the actual coordinates.
+      const xFraction = (minX / width).toFixed(3);
+      const yFraction = (minY / height).toFixed(3);
+
       // Icons are roughly square. A component far off square is two adjacent same-rarity
       // frames that the flood fill merged into one (connectivity only asks "is this pixel
       // any rarity color", not "is this the same icon"), or some other non-icon blob —
       // either way it's not one real frame, so drop just this component and keep going.
-      if (bboxWidth > bboxHeight * MAX_FRAME_ASPECT_RATIO || bboxHeight > bboxWidth * MAX_FRAME_ASPECT_RATIO) continue;
+      if (bboxWidth > bboxHeight * MAX_FRAME_ASPECT_RATIO || bboxHeight > bboxWidth * MAX_FRAME_ASPECT_RATIO) {
+        console.log(`findFrames: candidate at x=${xFraction} y=${yFraction} ${bboxWidth}x${bboxHeight} — dropped (aspect ratio)`);
+        continue;
+      }
 
       // The place/rank badge, not a reward icon — see MIN_FRAME_X_RATIO above.
-      if (minX / width < MIN_FRAME_X_RATIO) continue;
+      if (minX / width < MIN_FRAME_X_RATIO) {
+        console.log(`findFrames: candidate at x=${xFraction} y=${yFraction} ${bboxWidth}x${bboxHeight} — dropped (left margin)`);
+        continue;
+      }
+
+      console.log(`findFrames: candidate at x=${xFraction} y=${yFraction} ${bboxWidth}x${bboxHeight} — KEPT`);
 
       let rarity: RarityColor = 'blue';
       let bestCount = -1;
