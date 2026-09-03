@@ -21,6 +21,12 @@ interface Item {
 
 let countdownTimer: ReturnType<typeof setInterval> | undefined;
 
+const renderWinners = (label: string, winners: Winner[]) => `
+  <details class="winners">
+    <summary>${label} (${winners.length})</summary>
+    <p>${winners.map((w) => escapeHtml(w.nickname ?? '—')).join(', ')}</p>
+  </details>`;
+
 export async function renderPool(root: HTMLElement) {
   if (countdownTimer) clearInterval(countdownTimer);
   root.innerHTML = '<p class="spinner-text">Загрузка…</p>';
@@ -52,19 +58,16 @@ export async function renderPool(root: HTMLElement) {
         ${
           item.status === 'auctioned'
             ? `${
-                item.winners.length > 0
-                  ? `<details class="winners">
-                       <summary>Забрали (${item.winners.length})</summary>
-                       <p>${item.winners.map((w) => escapeHtml(w.nickname ?? '—')).join(', ')}</p>
-                     </details>`
-                  : `<p class="badge">Раскуплено: —</p>`
+                item.winners.length > 0 ? renderWinners('Забрали', item.winners) : `<p class="badge">Раскуплено: —</p>`
               }${
                 item.claimedByMe && !biddingClosed
                   ? `<button data-action="unclaim" class="btn-sm btn-secondary">Отменить</button>`
                   : ''
               }`
             : biddingClosed
-              ? `<p class="badge">Приём заявок окончен</p>`
+              ? item.winners.length > 0
+                ? renderWinners('Приём заявок завершён', item.winners)
+                : `<p class="badge">Приём заявок окончен</p>`
               : item.claimedByMe
                 ? `<button data-action="unclaim" class="btn-sm btn-secondary">Отменить</button>`
                 : `<button data-action="claim" class="btn-sm">Ставка</button>`
