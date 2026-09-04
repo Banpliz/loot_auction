@@ -1,5 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import path from 'node:path';
+import fs from 'node:fs/promises';
+import sharp from 'sharp';
 import type { AppDeps } from '../types';
 import { requireAdmin } from '../auth';
 import { computeIconSignature, isGenericChestIcon } from '../dedup';
@@ -8,6 +10,46 @@ import { winLimitGroup } from './events';
 
 const VALID_COLORS = new Set(['blue', 'purple', 'red']);
 const VALID_CATEGORIES = new Set(['item', 'stone']);
+
+// A manual lot has no real screenshot to crop an icon from, so every manual lot across
+// every event shares this one generated placeholder — the admin-entered comment/color is
+// what actually distinguishes them, not the icon.
+const MANUAL_PLACEHOLDER_IMAGE_PATH = 'items/manual-placeholder.png';
+const MANUAL_PLACEHOLDER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96">
+  <rect width="96" height="96" rx="14" fill="#3a3530"/>
+  <text x="48" y="64" font-family="sans-serif" font-size="46" font-weight="700" fill="#a89f92" text-anchor="middle">?</text>
+</svg>`;
+
+async function ensureManualPlaceholderImage(deps: AppDeps): Promise<void> {
+  const itemsDir = path.join(deps.dataDir, 'uploads', 'items');
+  const filePath = path.join(itemsDir, 'manual-placeholder.png');
+  await fs.mkdir(itemsDir, { recursive: true });
+  try {
+    await fs.access(filePath);
+  } catch {
+    const png = await sharp(Buffer.from(MANUAL_PLACEHOLDER_SVG)).png().toBuffer();
+    await fs.writeFile(filePath, png);
+  }
+}
+
+// One synthetic screenshot row per event backs every manual lot in it (screenshot_id is
+// NOT NULL on items — see db.ts). Its template mirrors whatever real screenshot the event
+// already has, so winLimitGroup (events.ts) applies the same win-limit rule to manual lots
+// as to the rest of the event; with no real screenshot yet, 'feast' is the arbitrary default.
+function getOrCreateManualScreenshot(deps: AppDeps, eventId: number, userId: number): number {
+  const existing = deps.db
+    .prepare("SELECT id FROM screenshots WHERE event_id = ? AND original_path = 'manual'")
+    .get(eventId) as { id: number } | undefined;
+  if (existing) return existing.id;
+
+  const real = deps.db
+    .prepare("SELECT template FROM screenshots WHERE event_id = ? AND original_path != 'manual' LIMIT 1")
+    .get(eventId) as { template: string } | undefined;
+
+  return deps.db
+    .prepare("INSERT INTO screenshots (event_id, original_path, rows, template, uploaded_by) VALUES (?, 'manual', 0, ?, ?)")
+    .run(eventId, real?.template ?? 'feast', userId).lastInsertRowid as number;
+}
 
 // Editing (name/color/category/quantity, remove, merge) is only allowed while the event
 // is still in draft. Once it's open, users may already be looking at (or claiming) these
@@ -128,6 +170,40 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
           }
         }
       }
+
+      return { ok: true };
+    }
+  );
+
+  app.post<{ Params: { id: string }; Body: { name?: string; quantity?: number; color?: string } }>(
+    '/events/:id/items/manual',
+    { preHandler: requireAdmin(deps) },
+    async (request, reply) => {
+      const eventId = Number(request.params.id);
+      if (!isEventDraft(deps, eventId)) {
+        reply.code(409).send({ error: 'event is not in draft' });
+        return;
+      }
+
+      const { name, quantity, color } = request.body ?? {};
+      if (!color || !VALID_COLORS.has(color)) {
+        reply.code(400).send({ error: 'color must be blue, purple, or red' });
+        return;
+      }
+      if (!Number.isInteger(quantity) || quantity! < 1) {
+        reply.code(400).send({ error: 'quantity must be a positive integer' });
+        return;
+      }
+
+      const userId = request.telegramUser!.telegramId;
+      await ensureManualPlaceholderImage(deps);
+      const screenshotId = getOrCreateManualScreenshot(deps, eventId, userId);
+
+      deps.db
+        .prepare(
+          "INSERT INTO items (event_id, screenshot_id, image_path, color, category, name, quantity, status) VALUES (?, ?, ?, ?, 'item', ?, ?, 'pool')"
+        )
+        .run(eventId, screenshotId, MANUAL_PLACEHOLDER_IMAGE_PATH, color, (name ?? '').trim(), quantity);
 
       return { ok: true };
     }

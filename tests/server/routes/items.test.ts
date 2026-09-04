@@ -1,4 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
 import { openDb, type Db } from '../../../src/server/db';
 import { buildServer } from '../../../src/server/server';
 import { signUserInitData } from '../../test-helpers';
@@ -348,5 +351,134 @@ describe('items routes', () => {
       payload: { intoId: itemBId },
     });
     expect(res.statusCode).toBe(409);
+  });
+});
+
+describe('POST /events/:id/items/manual', () => {
+  const botToken = 'test-token';
+  let db: Db;
+  let app: FastifyInstance;
+  let dataDir: string;
+  let adminInitData: string;
+  let aliceInitData: string;
+  let eventId: number;
+
+  beforeEach(async () => {
+    dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'items-manual-test-'));
+    db = openDb(':memory:');
+    app = buildServer({ db, botToken, adminTelegramIds: [1], dataDir });
+    adminInitData = signUserInitData(1, 'admin', botToken);
+    aliceInitData = signUserInitData(2, 'alice', botToken);
+    db.prepare("INSERT INTO users (telegram_id, username) VALUES (1, 'admin')").run();
+    eventId = db.prepare("INSERT INTO events (title, status) VALUES ('Ивент', 'draft')").run().lastInsertRowid as number;
+  });
+
+  afterEach(async () => {
+    await fs.rm(dataDir, { recursive: true, force: true });
+  });
+
+  it('creates a pool item with a placeholder icon, without any screenshot upload', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/items/manual`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { name: 'Компенсация', quantity: 3, color: 'purple' },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const row = db.prepare('SELECT name, quantity, color, category, status, image_path as imagePath FROM items WHERE event_id = ?').get(eventId) as any;
+    expect(row.name).toBe('Компенсация');
+    expect(row.quantity).toBe(3);
+    expect(row.color).toBe('purple');
+    expect(row.category).toBe('item');
+    expect(row.status).toBe('pool');
+
+    const iconStat = await fs.stat(path.join(dataDir, 'uploads', row.imagePath));
+    expect(iconStat.isFile()).toBe(true);
+  });
+
+  it('defaults name to an empty string when omitted', async () => {
+    await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/items/manual`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { quantity: 1, color: 'blue' },
+    });
+    const row = db.prepare('SELECT name FROM items WHERE event_id = ?').get(eventId) as any;
+    expect(row.name).toBe('');
+  });
+
+  it('reuses one synthetic screenshot row across multiple manual items in the same event', async () => {
+    await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/items/manual`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { quantity: 1, color: 'blue' },
+    });
+    await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/items/manual`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { quantity: 1, color: 'red' },
+    });
+    const screenshotCount = db.prepare('SELECT COUNT(*) as n FROM screenshots WHERE event_id = ?').get(eventId) as any;
+    expect(screenshotCount.n).toBe(1);
+  });
+
+  it('is admin-only', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/items/manual`,
+      headers: { 'x-telegram-init-data': aliceInitData, 'content-type': 'application/json' },
+      payload: { quantity: 1, color: 'blue' },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('is rejected once the event is no longer draft', async () => {
+    db.prepare("UPDATE events SET status = 'open' WHERE id = ?").run(eventId);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/items/manual`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { quantity: 1, color: 'blue' },
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('rejects an invalid color', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/items/manual`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { quantity: 1, color: 'green' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects a non-positive quantity', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/items/manual`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { quantity: 0, color: 'blue' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("carries over an existing screenshot's template so win-limits apply consistently", async () => {
+    db.prepare(
+      "INSERT INTO screenshots (event_id, original_path, rows, template, uploaded_by) VALUES (?, '/tmp/o.png', 1, 'invasion', 1)"
+    ).run(eventId);
+    await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/items/manual`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { quantity: 1, color: 'blue' },
+    });
+    const manualScreenshot = db
+      .prepare("SELECT template FROM screenshots WHERE event_id = ? AND original_path = 'manual'")
+      .get(eventId) as any;
+    expect(manualScreenshot.template).toBe('invasion');
   });
 });

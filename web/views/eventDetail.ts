@@ -102,7 +102,24 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
     }
     <section>
       <div class="section-title"><h3>Лоты</h3></div>
-      ${status === 'draft' ? `<input id="lot-search" type="search" placeholder="Поиск лота по названию…" />` : ''}
+      ${
+        status === 'draft'
+          ? `
+      <input id="lot-search" type="search" placeholder="Поиск лота по названию…" />
+      <button id="manual-lot-toggle" type="button" class="btn-secondary btn-sm" style="margin:0.5rem 0">+ Добавить лот вручную</button>
+      <form id="manual-lot-form" style="display:none">
+        <input id="manual-lot-name" placeholder="Пометка (не обязательно)" />
+        <div class="field-row">
+          <input id="manual-lot-quantity" type="number" min="1" value="1" placeholder="Кол-во" required />
+          <select id="manual-lot-color">
+            ${ITEM_COLORS.map((c) => `<option value="${c.value}">${c.label}</option>`).join('')}
+          </select>
+        </div>
+        <button type="submit" class="btn-block btn-sm">Добавить</button>
+      </form>
+      <p id="manual-lot-error" class="error"></p>`
+          : ''
+      }
       <div id="event-items"></div>
       ${
         status === 'draft'
@@ -374,6 +391,33 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
       }
       const okCount = files.length - failed.length;
       statusEl.textContent = okCount > 0 ? `Загружено ${okCount} из ${files.length}.` : '';
+    });
+  }
+
+  if (status === 'draft') {
+    const manualForm = root.querySelector('#manual-lot-form') as HTMLFormElement;
+    (root.querySelector('#manual-lot-toggle') as HTMLButtonElement).addEventListener('click', () => {
+      manualForm.style.display = manualForm.style.display === 'none' ? '' : 'none';
+    });
+    manualForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errorEl = root.querySelector('#manual-lot-error') as HTMLElement;
+      errorEl.textContent = '';
+      const name = (root.querySelector('#manual-lot-name') as HTMLInputElement).value;
+      const quantity = Number((root.querySelector('#manual-lot-quantity') as HTMLInputElement).value);
+      const color = (root.querySelector('#manual-lot-color') as HTMLSelectElement).value;
+      try {
+        await apiFetch(`/events/${eventId}/items/manual`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name, quantity, color }),
+        });
+        manualForm.reset();
+        manualForm.style.display = 'none';
+        await loadItems();
+      } catch (err) {
+        errorEl.textContent = (err as Error).message;
+      }
     });
   }
 
