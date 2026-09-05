@@ -114,6 +114,48 @@ export function cancelClaim(deps: AppDeps, itemId: number, telegramId: number): 
   return cancelled;
 }
 
+const MEMBER_DAILY_PURPLE_LIMIT = 1;
+const OFFICER_DAILY_PURPLE_LIMIT = 2;
+
+function isOfficerRank(deps: AppDeps, userId: number): boolean {
+  if (deps.adminTelegramIds.includes(userId)) return true;
+  const row = deps.db.prepare('SELECT rank FROM users WHERE telegram_id = ?').get(userId) as { rank: string } | undefined;
+  return row?.rank === 'officer';
+}
+
+// Moscow runs a fixed UTC+3 offset year-round (no DST since 2014) — the alliance's "day"
+// for the purple claim limit resets at Moscow midnight, not the server's own timezone or
+// each viewer's. Returns today's Moscow-day boundaries as UTC datetime strings in the
+// same 'YYYY-MM-DD HH:MM:SS' shape claims.created_at is stored in (SQLite's
+// datetime('now')), so they compare correctly as plain strings.
+const MOSCOW_OFFSET_MS = 3 * 60 * 60 * 1000;
+function moscowDayBoundsUtc(): { start: string; end: string } {
+  const toSqliteUtc = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+  const moscowNow = new Date(Date.now() + MOSCOW_OFFSET_MS);
+  const moscowMidnightUtcMs =
+    Date.UTC(moscowNow.getUTCFullYear(), moscowNow.getUTCMonth(), moscowNow.getUTCDate()) - MOSCOW_OFFSET_MS;
+  return { start: toSqliteUtc(moscowMidnightUtcMs), end: toSqliteUtc(moscowMidnightUtcMs + 24 * 60 * 60 * 1000) };
+}
+
+// Sums units of invasion-purple lots this person currently holds an active claim on,
+// claimed today (Moscow day) — across every event, not just one. Unclaiming (or being
+// kicked/banned, see cancelClaim) deletes the claims row, so it naturally frees this back
+// up rather than needing its own separate ledger.
+function getPurpleClaimedToday(deps: AppDeps, userId: number): number {
+  const { start, end } = moscowDayBoundsUtc();
+  const row = deps.db
+    .prepare(
+      `SELECT COALESCE(SUM(c.quantity), 0) as total
+       FROM claims c
+       JOIN items i ON i.id = c.item_id
+       JOIN screenshots s ON s.id = i.screenshot_id
+       WHERE c.telegram_id = ? AND i.color = 'purple' AND s.template = 'invasion'
+         AND c.created_at >= ? AND c.created_at < ?`
+    )
+    .get(userId, start, end) as { total: number };
+  return row.total;
+}
+
 function getUserGroupCounts(deps: AppDeps, eventId: number, userId: number): Map<string, number> {
   const rows = deps.db
     .prepare(
@@ -372,15 +414,26 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
       return;
     }
 
-    const { key, limit, exclusiveWith } = winLimitGroup(item.template, item.color, item.category);
-    const counts = getUserGroupCounts(deps, item.event_id, userId);
-    if ((counts.get(key) ?? 0) + quantity > limit) {
-      reply.code(409).send({ error: 'win limit reached' });
-      return;
-    }
-    if (exclusiveWith && (counts.get(exclusiveWith) ?? 0) > 0) {
-      reply.code(409).send({ error: 'already won in the other category' });
-      return;
+    // Invasion purple has its own rule — a daily cap by rank, across every event, not a
+    // per-event one — so it skips winLimitGroup/getUserGroupCounts entirely.
+    if (item.template === 'invasion' && item.color === 'purple') {
+      const dailyLimit = isOfficerRank(deps, userId) ? OFFICER_DAILY_PURPLE_LIMIT : MEMBER_DAILY_PURPLE_LIMIT;
+      const claimedToday = getPurpleClaimedToday(deps, userId);
+      if (claimedToday + quantity > dailyLimit) {
+        reply.code(409).send({ error: 'daily purple limit reached' });
+        return;
+      }
+    } else {
+      const { key, limit, exclusiveWith } = winLimitGroup(item.template, item.color, item.category);
+      const counts = getUserGroupCounts(deps, item.event_id, userId);
+      if ((counts.get(key) ?? 0) + quantity > limit) {
+        reply.code(409).send({ error: 'win limit reached' });
+        return;
+      }
+      if (exclusiveWith && (counts.get(exclusiveWith) ?? 0) > 0) {
+        reply.code(409).send({ error: 'already won in the other category' });
+        return;
+      }
     }
 
     // Claiming a lot immediately reserves the requested units of it — first come, first

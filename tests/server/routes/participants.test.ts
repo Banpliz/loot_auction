@@ -29,7 +29,37 @@ describe('participants routes', () => {
     const res = await app.inject({ method: 'GET', url: '/api/participants', headers: { 'x-telegram-init-data': adminInitData } });
     expect(res.statusCode).toBe(200);
     const { participants } = res.json();
-    expect(participants).toEqual([{ telegramId: 2, username: 'alice', gameNickname: 'Alice', status: 'pending' }]);
+    expect(participants).toEqual([{ telegramId: 2, username: 'alice', gameNickname: 'Alice', status: 'pending', rank: 'member' }]);
+  });
+
+  it('POST /participants/:id/rank is admin-only and sets the rank', async () => {
+    const forbidden = await app.inject({
+      method: 'POST',
+      url: '/api/participants/2/rank',
+      headers: { 'x-telegram-init-data': aliceInitData, 'content-type': 'application/json' },
+      payload: { rank: 'officer' },
+    });
+    expect(forbidden.statusCode).toBe(403);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/participants/2/rank',
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { rank: 'officer' },
+    });
+    expect(res.statusCode).toBe(200);
+    const row = db.prepare('SELECT rank FROM users WHERE telegram_id = 2').get() as any;
+    expect(row.rank).toBe('officer');
+  });
+
+  it('POST /participants/:id/rank rejects an invalid rank', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/participants/2/rank',
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { rank: 'general' },
+    });
+    expect(res.statusCode).toBe(400);
   });
 
   it('POST /participants/:id/approve is admin-only and approves the user', async () => {

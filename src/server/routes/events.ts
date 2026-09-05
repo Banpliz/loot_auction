@@ -13,28 +13,32 @@ interface EventRow {
 
 const START_DELAY_MS = 10_000;
 
-type ColorGroup = 'purpleRed' | 'blue';
+type ColorGroup = 'red' | 'blue';
 type CategoryGroup = 'item' | 'stone';
 
-// Fixed by design, not admin-configurable. Invasion caps by rarity color (purple+red
-// combined 1 win/person/event, blue 2). Feast's alliance rule cuts across colors instead
-// — gear (armor/weapons/etc.) capped at 1, tempering stones at 3 — so it's grouped by
-// admin-set item.category rather than color. The two feast groups are also mutually
-// exclusive (2026-08-28): winning a stone rules a person out of ever winning gear in the
-// same event, and vice versa. Originally enforced once at the end-of-event draw; now
-// enforced by items.ts's claim endpoint on every single claim attempt (2026-08-31), since
-// there's no more draw step — see docs/superpowers/specs/2026-08-31-fcfs-reservation-design.md.
-const COLOR_WIN_LIMITS: Record<ColorGroup, number> = { purpleRed: 1, blue: 2 };
+// Fixed by design, not admin-configurable. Invasion caps blue at 2/event and red at
+// 1/event. Purple used to share red's group (combined 1/event) but now has its own rule
+// entirely — a daily, rank-based cap across every event, not a per-event one — see
+// items.ts's getPurpleClaimedToday; this function is never consulted for purple anymore.
+// Feast's alliance rule cuts across colors instead — gear (armor/weapons/etc.) capped at
+// 1, tempering stones at 3 — so it's grouped by admin-set item.category rather than
+// color. The two feast groups are also mutually exclusive (2026-08-28): winning a stone
+// rules a person out of ever winning gear in the same event, and vice versa. Originally
+// enforced once at the end-of-event draw; now enforced by items.ts's claim endpoint on
+// every single claim attempt (2026-08-31), since there's no more draw step — see
+// docs/superpowers/specs/2026-08-31-fcfs-reservation-design.md.
+const COLOR_WIN_LIMITS: Record<ColorGroup, number> = { red: 1, blue: 2 };
 const CATEGORY_WIN_LIMITS: Record<CategoryGroup, number> = { item: 1, stone: 3 };
 
 function colorGroup(color: string): ColorGroup {
-  return color === 'blue' ? 'blue' : 'purpleRed';
+  return color === 'blue' ? 'blue' : 'red';
 }
 
 // Returns a per-person counter key (namespaced so a color group and a category group
 // can never collide), the cap that applies to it, and — for feast only — the other
 // category's key: any existing win there makes a person ineligible for this one too.
-// Exported for items.ts's claim endpoint, which is now the sole caller of this rule.
+// Exported for items.ts's claim endpoint. Never called with color 'purple' under
+// template 'invasion' — items.ts intercepts that case before reaching this function.
 export function winLimitGroup(template: string, color: string, category: string): { key: string; limit: number; exclusiveWith?: string } {
   if (template === 'feast') {
     const group: CategoryGroup = category === 'stone' ? 'stone' : 'item';

@@ -42,6 +42,7 @@ function migrate(db: Db) {
       username TEXT,
       game_nickname TEXT,
       status TEXT NOT NULL DEFAULT 'pending',
+      rank TEXT NOT NULL DEFAULT 'member',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -143,5 +144,11 @@ function migrate(db: Db) {
   const eventColumns = db.prepare('PRAGMA table_info(events)').all() as { name: string }[];
   if (!eventColumns.some((c) => c.name === 'starts_at')) {
     db.exec(`ALTER TABLE events ADD COLUMN starts_at TEXT`);
+  }
+
+  // Additive column: officer rank ('member' | 'officer'), set by an admin in the
+  // "Заявки" tab — gates the daily invasion-purple claim limit (see items.ts).
+  if (!userColumns.some((c) => c.name === 'rank')) {
+    db.exec(`ALTER TABLE users ADD COLUMN rank TEXT NOT NULL DEFAULT 'member'`);
   }
 }

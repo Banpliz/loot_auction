@@ -7,10 +7,11 @@ interface Participant {
   username: string | null;
   gameNickname: string | null;
   status: 'pending' | 'approved' | 'banned';
+  rank: 'member' | 'officer';
 }
 
 const whoLabel = (p: Participant) =>
-  `${escapeHtml(p.gameNickname ?? '—')}${p.username ? ` (@${escapeHtml(p.username)})` : ''}`;
+  `${escapeHtml(p.gameNickname ?? '—')}${p.username ? ` (@${escapeHtml(p.username)})` : ''}${p.rank === 'officer' ? ' · Зам' : ''}`;
 
 export async function renderParticipants(root: HTMLElement) {
   root.innerHTML = '<p class="spinner-text">Загрузка…</p>';
@@ -52,6 +53,11 @@ export async function renderParticipants(root: HTMLElement) {
               <div class="admin-item" data-id="${p.telegramId}">
                 <p>${whoLabel(p)}</p>
                 <div class="admin-item-actions">
+                  ${
+                    p.rank === 'officer'
+                      ? `<button class="btn-secondary btn-sm" data-action="rank" data-rank="member">Разжаловать</button>`
+                      : `<button class="btn-secondary btn-sm" data-action="rank" data-rank="officer">Сделать замом</button>`
+                  }
                   <button class="btn-danger btn-sm" data-action="ban">Исключить</button>
                 </div>
               </div>`
@@ -84,8 +90,12 @@ export async function renderParticipants(root: HTMLElement) {
       button.addEventListener('click', async () => {
         const telegramId = (button.closest('.admin-item') as HTMLElement).dataset.id;
         const action = button.getAttribute('data-action');
+        const rank = (button as HTMLElement).dataset.rank;
         try {
-          await apiFetch(`/participants/${telegramId}/${action}`, { method: 'POST' });
+          await apiFetch(`/participants/${telegramId}/${action}`, {
+            method: 'POST',
+            ...(action === 'rank' ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ rank }) } : {}),
+          });
           await load();
         } catch (err) {
           (root.querySelector('#participants-error') as HTMLElement).textContent = (err as Error).message;

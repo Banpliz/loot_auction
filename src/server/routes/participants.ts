@@ -7,14 +7,31 @@ export function registerParticipantRoutes(app: FastifyInstance, deps: AppDeps) {
   app.get('/participants', { preHandler: requireAdmin(deps) }, async () => {
     const rows = deps.db
       .prepare(
-        `SELECT telegram_id as telegramId, username, game_nickname as gameNickname, status
+        `SELECT telegram_id as telegramId, username, game_nickname as gameNickname, status, rank
          FROM users
          ORDER BY created_at DESC`
       )
-      .all() as { telegramId: number; username: string | null; gameNickname: string | null; status: string }[];
+      .all() as { telegramId: number; username: string | null; gameNickname: string | null; status: string; rank: string }[];
 
     return { participants: rows.filter((r) => !deps.adminTelegramIds.includes(r.telegramId)) };
   });
+
+  // Officer rank gates the daily invasion-purple claim limit (see items.ts's
+  // isOfficerRank) — otherwise carries no other permission in the app.
+  app.post<{ Params: { telegramId: string }; Body: { rank?: string } }>(
+    '/participants/:telegramId/rank',
+    { preHandler: requireAdmin(deps) },
+    async (request, reply) => {
+      const telegramId = Number(request.params.telegramId);
+      const rank = request.body?.rank;
+      if (rank !== 'member' && rank !== 'officer') {
+        reply.code(400).send({ error: 'rank must be member or officer' });
+        return;
+      }
+      deps.db.prepare('UPDATE users SET rank = ? WHERE telegram_id = ?').run(rank, telegramId);
+      return { ok: true };
+    }
+  );
 
   app.post<{ Params: { telegramId: string } }>(
     '/participants/:telegramId/approve',

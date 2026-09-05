@@ -215,7 +215,7 @@ describe('items routes', () => {
     expect(second.statusCode).toBe(409);
   });
 
-  it('respects per-color win limits for invasion at claim time (purple+red combined 1, blue 2)', async () => {
+  it('respects per-color win limits for invasion at claim time (red 1/event, blue 2/event, independent of each other)', async () => {
     const invasionEventId = db
       .prepare("INSERT INTO events (title, status) VALUES ('Вторжение', 'open')")
       .run().lastInsertRowid as number;
@@ -225,18 +225,93 @@ describe('items routes', () => {
     const insertItem = db.prepare(
       "INSERT INTO items (event_id, screenshot_id, name, image_path, status, color) VALUES (?, ?, ?, 'items/x.png', 'pool', ?)"
     );
-    const purpleId = insertItem.run(invasionEventId, screenshotId, 'Purple', 'purple').lastInsertRowid as number;
-    const redId = insertItem.run(invasionEventId, screenshotId, 'Red', 'red').lastInsertRowid as number;
+    const redAId = insertItem.run(invasionEventId, screenshotId, 'Red A', 'red').lastInsertRowid as number;
+    const redBId = insertItem.run(invasionEventId, screenshotId, 'Red B', 'red').lastInsertRowid as number;
     const blueAId = insertItem.run(invasionEventId, screenshotId, 'Blue A', 'blue').lastInsertRowid as number;
     const blueBId = insertItem.run(invasionEventId, screenshotId, 'Blue B', 'blue').lastInsertRowid as number;
     const blueCId = insertItem.run(invasionEventId, screenshotId, 'Blue C', 'blue').lastInsertRowid as number;
 
-    expect((await app.inject({ method: 'POST', url: `/api/items/${purpleId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } })).statusCode).toBe(200);
-    expect((await app.inject({ method: 'POST', url: `/api/items/${redId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } })).statusCode).toBe(409);
+    expect((await app.inject({ method: 'POST', url: `/api/items/${redAId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'POST', url: `/api/items/${redBId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } })).statusCode).toBe(409);
 
     expect((await app.inject({ method: 'POST', url: `/api/items/${blueAId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } })).statusCode).toBe(200);
     expect((await app.inject({ method: 'POST', url: `/api/items/${blueBId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } })).statusCode).toBe(200);
     expect((await app.inject({ method: 'POST', url: `/api/items/${blueCId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } })).statusCode).toBe(409);
+  });
+
+  describe('invasion purple: daily rank-based limit', () => {
+    let invasionEventId: number;
+    let screenshotId: number;
+    let insertPurple: (name: string) => number;
+
+    beforeEach(() => {
+      invasionEventId = db
+        .prepare("INSERT INTO events (title, status) VALUES ('Вторжение', 'open')")
+        .run().lastInsertRowid as number;
+      screenshotId = db
+        .prepare("INSERT INTO screenshots (event_id, original_path, rows, template, uploaded_by) VALUES (?, ?, 1, 'invasion', 1)")
+        .run(invasionEventId, '/tmp/purple.png').lastInsertRowid as number;
+      insertPurple = (name: string) =>
+        db
+          .prepare(
+            "INSERT INTO items (event_id, screenshot_id, name, image_path, status, color) VALUES (?, ?, ?, 'items/x.png', 'pool', 'purple')"
+          )
+          .run(invasionEventId, screenshotId, name).lastInsertRowid as number;
+    });
+
+    it('caps a regular member at 1 purple claim per day, across different lots', async () => {
+      const purpleA = insertPurple('Purple A');
+      const purpleB = insertPurple('Purple B');
+      expect((await app.inject({ method: 'POST', url: `/api/items/${purpleA}/claim`, headers: { 'x-telegram-init-data': aliceInitData } })).statusCode).toBe(200);
+      expect((await app.inject({ method: 'POST', url: `/api/items/${purpleB}/claim`, headers: { 'x-telegram-init-data': aliceInitData } })).statusCode).toBe(409);
+    });
+
+    it('lets an officer claim purple twice in the same day', async () => {
+      db.prepare("UPDATE users SET rank = 'officer' WHERE telegram_id = 2").run();
+      const purpleA = insertPurple('Purple A');
+      const purpleB = insertPurple('Purple B');
+      const purpleC = insertPurple('Purple C');
+      expect((await app.inject({ method: 'POST', url: `/api/items/${purpleA}/claim`, headers: { 'x-telegram-init-data': aliceInitData } })).statusCode).toBe(200);
+      expect((await app.inject({ method: 'POST', url: `/api/items/${purpleB}/claim`, headers: { 'x-telegram-init-data': aliceInitData } })).statusCode).toBe(200);
+      expect((await app.inject({ method: 'POST', url: `/api/items/${purpleC}/claim`, headers: { 'x-telegram-init-data': aliceInitData } })).statusCode).toBe(409);
+    });
+
+    it('counts across different events on the same day, not per event', async () => {
+      const secondEventId = db.prepare("INSERT INTO events (title, status) VALUES ('Вторжение 2', 'open')").run().lastInsertRowid as number;
+      const secondScreenshotId = db
+        .prepare("INSERT INTO screenshots (event_id, original_path, rows, template, uploaded_by) VALUES (?, ?, 1, 'invasion', 1)")
+        .run(secondEventId, '/tmp/purple2.png').lastInsertRowid as number;
+      const purpleInEventOne = insertPurple('Purple 1');
+      const purpleInEventTwo = db
+        .prepare(
+          "INSERT INTO items (event_id, screenshot_id, name, image_path, status, color) VALUES (?, ?, 'Purple 2', 'items/y.png', 'pool', 'purple')"
+        )
+        .run(secondEventId, secondScreenshotId).lastInsertRowid as number;
+
+      expect((await app.inject({ method: 'POST', url: `/api/items/${purpleInEventOne}/claim`, headers: { 'x-telegram-init-data': aliceInitData } })).statusCode).toBe(200);
+      expect((await app.inject({ method: 'POST', url: `/api/items/${purpleInEventTwo}/claim`, headers: { 'x-telegram-init-data': aliceInitData } })).statusCode).toBe(409);
+    });
+
+    it('frees up the daily count again after unclaiming', async () => {
+      const purpleA = insertPurple('Purple A');
+      const purpleB = insertPurple('Purple B');
+      await app.inject({ method: 'POST', url: `/api/items/${purpleA}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
+      await app.inject({ method: 'DELETE', url: `/api/items/${purpleA}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
+      const res = await app.inject({ method: 'POST', url: `/api/items/${purpleB}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
+      expect(res.statusCode).toBe(200);
+    });
+
+    it("doesn't count a claim from a previous day against today's limit", async () => {
+      const purpleA = insertPurple('Purple A');
+      const purpleB = insertPurple('Purple B');
+      const claimA = await app.inject({ method: 'POST', url: `/api/items/${purpleA}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
+      expect(claimA.statusCode).toBe(200);
+      // Backdate the claim itself, as if it had been made yesterday.
+      db.prepare("UPDATE claims SET created_at = datetime('now', '-2 days') WHERE item_id = ?").run(purpleA);
+
+      const claimB = await app.inject({ method: 'POST', url: `/api/items/${purpleB}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
+      expect(claimB.statusCode).toBe(200);
+    });
   });
 
   it('unclaiming gives the unit back: quantity increments and status returns to pool', async () => {

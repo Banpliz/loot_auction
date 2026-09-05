@@ -42,6 +42,7 @@ const CLAIM_ERROR_MESSAGES: Record<string, string> = {
   'not enough remaining quantity': 'Осталось меньше, чем ты выбрал — список сейчас обновится.',
   'already claimed': 'Ты уже сделал ставку на этот лот.',
   'win limit reached': 'Достигнут лимит побед для этой редкости/категории.',
+  'daily purple limit reached': 'На сегодня лимит фиолетовых лотов исчерпан.',
   'already won in the other category': 'Нельзя — ты уже выиграл в другой категории.',
   'bidding has ended': 'Приём заявок уже завершён.',
 };
@@ -132,8 +133,14 @@ export async function renderPool(root: HTMLElement) {
     return `<button data-action="claim" class="btn-sm">Ставка</button>`;
   };
 
+  // Once bidding closes, a lot nobody touched at all sinks to its own "Свободные" section
+  // below every occupied lot (see renderList) — those go on to be fought over in-game by
+  // the normal auction rules, so no claim UI belongs on them here at all (already true:
+  // the biddingClosed branch below never renders a button for a lot with no winners).
+  const isOccupied = (item: Item) => item.status === 'auctioned' || item.winners.length > 0;
+
   const renderItem = (item: Item) => `
-      <div class="lot-row" data-id="${item.id}" style="border-left: 4px solid ${item.status === 'auctioned' ? 'var(--text-muted)' : colorHex(item.color)}">
+      <div class="lot-row" data-id="${item.id}" style="border-left: 4px solid ${item.status === 'auctioned' || (biddingClosed && isOccupied(item)) ? 'var(--text-muted)' : colorHex(item.color)}">
         <img src="/uploads/${item.imagePath}" alt="${escapeHtml(item.name) || 'Лот'}" />
         <div class="lot-row__info">
           ${item.name ? `<p class="lot-row__name">${escapeHtml(item.name)}</p>` : ''}
@@ -158,6 +165,17 @@ export async function renderPool(root: HTMLElement) {
         }
       </div>`;
 
+  // After the auction ends, untouched lots move below every occupied one — under their
+  // own "Свободные" heading — instead of staying interleaved by rarity like during
+  // bidding. Skip the headings entirely when everything landed in one bucket.
+  const renderClosedGroups = () => {
+    const occupied = allItems.filter(isOccupied);
+    const free = allItems.filter((item) => !isOccupied(item));
+    const section = (label: string, items: Item[]) =>
+      items.length === 0 ? '' : (occupied.length > 0 && free.length > 0 ? `<h4 class="lots-section">${label}</h4>` : '') + items.map(renderItem).join('');
+    return section('Заняты', occupied) + section('Свободные', free);
+  };
+
   function renderList() {
     // A background poll can land while someone has bumped a stepper to 2 but not yet
     // pressed "Забрать" — rebuilding the row from scratch would silently reset their pick
@@ -170,7 +188,8 @@ export async function renderPool(root: HTMLElement) {
       if (stepper) pickedQty.set(Number((row as HTMLElement).dataset.id), Number(stepper.dataset.qty));
     });
 
-    listEl.innerHTML = allItems.length === 0 ? '<p class="empty-state">Лоты ещё не загружены</p>' : allItems.map(renderItem).join('');
+    listEl.innerHTML =
+      allItems.length === 0 ? '<p class="empty-state">Лоты ещё не загружены</p>' : biddingClosed ? renderClosedGroups() : allItems.map(renderItem).join('');
 
     listEl.querySelectorAll('.lot-row').forEach((row) => {
       const id = Number((row as HTMLElement).dataset.id);
