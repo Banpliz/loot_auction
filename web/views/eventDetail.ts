@@ -7,7 +7,10 @@ import { ITEM_COLORS, ITEM_CATEGORIES, colorHex } from '../format';
 interface Winner {
   telegramId: number;
   nickname: string | null;
+  quantity: number;
 }
+
+const winnerLabel = (w: Winner) => escapeHtml(w.nickname ?? '—') + (w.quantity > 1 ? ` ×${w.quantity}` : '');
 
 interface AdminItem {
   id: number;
@@ -187,7 +190,7 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
             </select>
           </div>
           <span class="status-pill">${STATUS_LABEL[item.status]}${
-            item.winners.length > 0 ? ' · ' + item.winners.map((w) => escapeHtml(w.nickname ?? '—')).join(', ') : ''
+            item.winners.length > 0 ? ' · ' + item.winners.map(winnerLabel).join(', ') : ''
           }</span>
           <div class="admin-item-actions">
             <button class="btn-secondary btn-sm" data-action="save">Сохранить</button>
@@ -280,7 +283,7 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
           <p>${escapeHtml(item.name) || '—'}</p>
           <span class="status-pill">
             ${colorLabel} · ${categoryLabel} · Осталось ${item.quantity} · ${STATUS_LABEL[item.status]}
-            ${item.winners.length > 0 ? ' · ' + item.winners.map((w) => escapeHtml(w.nickname ?? '—')).join(', ') : ''}
+            ${item.winners.length > 0 ? ' · ' + item.winners.map(winnerLabel).join(', ') : ''}
           </span>
         </div>`;
       })

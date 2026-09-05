@@ -81,18 +81,18 @@ function isPastDeadline(deps: AppDeps, eventId: number): boolean {
 function getUserGroupCounts(deps: AppDeps, eventId: number, userId: number): Map<string, number> {
   const rows = deps.db
     .prepare(
-      `SELECT i.color, i.category, s.template
+      `SELECT i.color, i.category, s.template, c.quantity
        FROM claims c
        JOIN items i ON i.id = c.item_id
        JOIN screenshots s ON s.id = i.screenshot_id
        WHERE i.event_id = ? AND c.telegram_id = ?`
     )
-    .all(eventId, userId) as { color: string; category: string; template: string }[];
+    .all(eventId, userId) as { color: string; category: string; template: string; quantity: number }[];
 
   const counts = new Map<string, number>();
   for (const row of rows) {
     const { key } = winLimitGroup(row.template, row.color, row.category);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
+    counts.set(key, (counts.get(key) ?? 0) + row.quantity);
   }
   return counts;
 }
@@ -275,9 +275,13 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
     }
   );
 
-  app.post<{ Params: { id: string } }>('/items/:id/claim', async (request, reply) => {
+  app.post<{ Params: { id: string }; Body: { quantity?: number } }>('/items/:id/claim', async (request, reply) => {
     const itemId = Number(request.params.id);
     const userId = request.telegramUser!.telegramId;
+    // Blue invasion lots allow winning up to 2 units per event (see winLimitGroup), so a
+    // single claim can reserve more than one unit at once instead of forcing two separate
+    // claims across two different lots. Every other case keeps sending no quantity at all.
+    const quantity = request.body?.quantity ?? 1;
 
     const item = deps.db
       .prepare(
@@ -290,6 +294,14 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
       | undefined;
     if (!item || item.status !== 'pool') {
       reply.code(409).send({ error: 'item is not claimable' });
+      return;
+    }
+    if (!Number.isInteger(quantity) || quantity < 1) {
+      reply.code(400).send({ error: 'quantity must be a positive integer' });
+      return;
+    }
+    if (quantity > item.quantity) {
+      reply.code(409).send({ error: 'not enough remaining quantity' });
       return;
     }
 
@@ -317,7 +329,7 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
 
     const { key, limit, exclusiveWith } = winLimitGroup(item.template, item.color, item.category);
     const counts = getUserGroupCounts(deps, item.event_id, userId);
-    if ((counts.get(key) ?? 0) >= limit) {
+    if ((counts.get(key) ?? 0) + quantity > limit) {
       reply.code(409).send({ error: 'win limit reached' });
       return;
     }
@@ -326,18 +338,18 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
       return;
     }
 
-    // Claiming a lot immediately reserves one unit of it — first come, first served —
-    // instead of just registering interest for a later random draw. Wrapped in a
-    // transaction so a crash between the two writes can't leave a claim row without
-    // the matching stock decrement (or vice versa).
-    const claimUnit = deps.db.transaction(() => {
-      deps.db.prepare('INSERT INTO claims (item_id, telegram_id) VALUES (?, ?)').run(itemId, userId);
-      const remaining = item.quantity - 1;
+    // Claiming a lot immediately reserves the requested units of it — first come, first
+    // served — instead of just registering interest for a later random draw. Wrapped in a
+    // transaction so a crash between the two writes can't leave a claim row without the
+    // matching stock decrement (or vice versa).
+    const claimUnits = deps.db.transaction(() => {
+      deps.db.prepare('INSERT INTO claims (item_id, telegram_id, quantity) VALUES (?, ?, ?)').run(itemId, userId, quantity);
+      const remaining = item.quantity - quantity;
       deps.db
         .prepare('UPDATE items SET quantity = ?, status = ? WHERE id = ?')
         .run(remaining, remaining <= 0 ? 'auctioned' : 'pool', itemId);
     });
-    claimUnit();
+    claimUnits();
 
     return { ok: true };
   });
@@ -358,11 +370,14 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
     }
 
     const unclaimUnit = deps.db.transaction(() => {
+      const claim = deps.db.prepare('SELECT quantity FROM claims WHERE item_id = ? AND telegram_id = ?').get(itemId, userId) as
+        | { quantity: number }
+        | undefined;
       const result = deps.db.prepare('DELETE FROM claims WHERE item_id = ? AND telegram_id = ?').run(itemId, userId);
-      if (result.changes > 0 && item) {
-        // Giving the unit back always returns the lot to 'pool', even if claiming it was
+      if (result.changes > 0 && item && claim) {
+        // Giving the units back always returns the lot to 'pool', even if claiming it was
         // what had taken it to 'auctioned' (sold out) — the quantity math is symmetric.
-        deps.db.prepare("UPDATE items SET quantity = quantity + 1, status = 'pool' WHERE id = ?").run(itemId);
+        deps.db.prepare("UPDATE items SET quantity = quantity + ?, status = 'pool' WHERE id = ?").run(claim.quantity, itemId);
       }
     });
     unclaimUnit();

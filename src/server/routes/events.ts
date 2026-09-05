@@ -50,6 +50,7 @@ const COLOR_ORDER_SQL = `CASE i.color WHEN 'red' THEN 0 WHEN 'purple' THEN 1 WHE
 interface Winner {
   telegramId: number;
   nickname: string | null;
+  quantity: number;
 }
 
 // Attaches a `winners` array to each item — one entry per person currently holding a
@@ -61,17 +62,17 @@ function attachWinners<T extends { id: number }>(deps: AppDeps, items: T[]): (T 
   const placeholders = items.map(() => '?').join(',');
   const rows = deps.db
     .prepare(
-      `SELECT c.item_id as itemId, u.telegram_id as telegramId, u.game_nickname as nickname
+      `SELECT c.item_id as itemId, u.telegram_id as telegramId, u.game_nickname as nickname, c.quantity as quantity
        FROM claims c
        LEFT JOIN users u ON u.telegram_id = c.telegram_id
        WHERE c.item_id IN (${placeholders})`
     )
-    .all(...items.map((i) => i.id)) as { itemId: number; telegramId: number; nickname: string | null }[];
+    .all(...items.map((i) => i.id)) as { itemId: number; telegramId: number; nickname: string | null; quantity: number }[];
 
   const winnersByItem = new Map<number, Winner[]>();
   for (const row of rows) {
     const list = winnersByItem.get(row.itemId) ?? [];
-    list.push({ telegramId: row.telegramId, nickname: row.nickname });
+    list.push({ telegramId: row.telegramId, nickname: row.nickname, quantity: row.quantity });
     winnersByItem.set(row.itemId, list);
   }
   return items.map((item) => ({ ...item, winners: winnersByItem.get(item.id) ?? [] }));

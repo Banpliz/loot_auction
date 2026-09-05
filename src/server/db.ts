@@ -81,6 +81,7 @@ function migrate(db: Db) {
       id INTEGER PRIMARY KEY,
       item_id INTEGER NOT NULL REFERENCES items(id),
       telegram_id INTEGER NOT NULL REFERENCES users(telegram_id),
+      quantity INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       UNIQUE(item_id, telegram_id)
     );
@@ -115,5 +116,12 @@ function migrate(db: Db) {
   const itemColumns = db.prepare('PRAGMA table_info(items)').all() as { name: string }[];
   if (!itemColumns.some((c) => c.name === 'category')) {
     db.exec(`ALTER TABLE items ADD COLUMN category TEXT NOT NULL DEFAULT 'item'`);
+  }
+
+  // Additive column: how many units a single claim reserved. Existing rows predate
+  // multi-unit claims (a claim was always exactly 1 unit), so they default to 1.
+  const claimColumns = db.prepare('PRAGMA table_info(claims)').all() as { name: string }[];
+  if (!claimColumns.some((c) => c.name === 'quantity')) {
+    db.exec(`ALTER TABLE claims ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1`);
   }
 }

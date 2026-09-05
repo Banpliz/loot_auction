@@ -258,11 +258,40 @@ describe('events routes', () => {
 
     const claimed = body.items.find((i: any) => i.id === claimedItem.lastInsertRowid);
     expect(claimed.status).toBe('auctioned');
-    expect(claimed.winners).toEqual([{ telegramId: 2, nickname: 'Bob' }]);
+    expect(claimed.winners).toEqual([{ telegramId: 2, nickname: 'Bob', quantity: 1 }]);
 
     const unclaimed = body.items.find((i: any) => i.id === unclaimedItem.lastInsertRowid);
     expect(unclaimed.status).toBe('pool');
     expect(unclaimed.winners).toEqual([]);
+  });
+
+  it('winners list reports how many units a claim reserved', async () => {
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/events',
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { title: 'Ивент' },
+    });
+    const eventId = createRes.json().id;
+    const screenshot = db
+      .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
+      .run(eventId, '/tmp/original.png');
+    const item = db
+      .prepare(
+        "INSERT INTO items (event_id, screenshot_id, name, image_path, status, quantity) VALUES (?, ?, 'Сундук', 'items/a.png', 'auctioned', 0)"
+      )
+      .run(eventId, screenshot.lastInsertRowid);
+    db.prepare('INSERT INTO claims (item_id, telegram_id, quantity) VALUES (?, 2, 2)').run(item.lastInsertRowid);
+    await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/start`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { durationMinutes: 25 },
+    });
+
+    const poolRes = await app.inject({ method: 'GET', url: '/api/events/current', headers: { 'x-telegram-init-data': memberInitData } });
+    const found = poolRes.json().items.find((i: any) => i.id === item.lastInsertRowid);
+    expect(found.winners).toEqual([{ telegramId: 2, nickname: 'Bob', quantity: 2 }]);
   });
 
   it('GET /events lists all events regardless of status, with item counts, admin-only', async () => {
