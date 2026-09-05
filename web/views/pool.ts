@@ -22,6 +22,13 @@ interface Item {
 }
 
 let countdownTimer: ReturnType<typeof setInterval> | undefined;
+let pollTimer: ReturnType<typeof setInterval> | undefined;
+
+// Someone else claiming a lot only ever showed up for a viewer after they manually
+// reloaded the page — confusing when several people are bidding on the same lots at once.
+// A short poll is plenty for an alliance-sized auction; a websocket/SSE push would be
+// real infrastructure for a problem this small.
+const POLL_INTERVAL_MS = 3000;
 
 const winnerLabel = (w: Winner) => escapeHtml(w.nickname ?? '—') + (w.quantity > 1 ? ` ×${w.quantity}` : '');
 
@@ -33,6 +40,7 @@ const renderWinners = (label: string, winners: Winner[]) => `
 
 export async function renderPool(root: HTMLElement) {
   if (countdownTimer) clearInterval(countdownTimer);
+  if (pollTimer) clearInterval(pollTimer);
   root.innerHTML = '<p class="spinner-text">Загрузка…</p>';
 
   const data = await apiFetch('/events/current');
@@ -99,7 +107,28 @@ export async function renderPool(root: HTMLElement) {
       </div>`;
 
   function renderList() {
+    // A background poll can land while someone has bumped a stepper to 2 but not yet
+    // pressed "Забрать" — rebuilding the row from scratch would silently reset their pick
+    // back to 1, and they'd claim less than they meant to without noticing. Snapshot every
+    // stepper's current pick before the rebuild and restore it after, clamped to whatever
+    // the item's new max allows (it may have shrunk if someone else claimed a unit).
+    const pickedQty = new Map<number, number>();
+    listEl.querySelectorAll('.lot-row').forEach((row) => {
+      const stepper = row.querySelector('.claim-stepper') as HTMLElement | null;
+      if (stepper) pickedQty.set(Number((row as HTMLElement).dataset.id), Number(stepper.dataset.qty));
+    });
+
     listEl.innerHTML = allItems.length === 0 ? '<p class="empty-state">Лоты ещё не загружены</p>' : allItems.map(renderItem).join('');
+
+    listEl.querySelectorAll('.lot-row').forEach((row) => {
+      const id = Number((row as HTMLElement).dataset.id);
+      const picked = pickedQty.get(id);
+      const stepper = row.querySelector('.claim-stepper') as HTMLElement | null;
+      if (picked === undefined || !stepper) return;
+      const restored = Math.min(picked, Number(stepper.dataset.max));
+      stepper.dataset.qty = String(restored);
+      (stepper.querySelector('.claim-stepper__value') as HTMLElement).textContent = String(restored);
+    });
 
     // Stepper +/- only adjusts local state (how many units the confirm click below will
     // request) — no network call until "Забрать"/"Ставка"/"Отменить" is actually pressed.
@@ -160,4 +189,25 @@ export async function renderPool(root: HTMLElement) {
   };
   updateCountdown();
   countdownTimer = setInterval(updateCountdown, 1000);
+
+  pollTimer = setInterval(async () => {
+    if (document.hidden) return;
+    let fresh;
+    try {
+      fresh = await apiFetch('/events/current');
+    } catch {
+      return; // transient network hiccup — try again next tick, don't interrupt the user
+    }
+    // The event itself changed (a new one started, this one was deleted, or its deadline
+    // moved) — simplest correct thing is to reload the whole view rather than patch it.
+    if (fresh.event?.id !== data.event.id || fresh.event?.deadlineAt !== data.event.deadlineAt) {
+      renderPool(root);
+      return;
+    }
+    const freshItems = fresh.items as Item[];
+    if (JSON.stringify(freshItems) !== JSON.stringify(allItems)) {
+      allItems.splice(0, allItems.length, ...freshItems);
+      renderList();
+    }
+  }, POLL_INTERVAL_MS);
 }
