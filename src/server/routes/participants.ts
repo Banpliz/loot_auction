@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { AppDeps } from '../types';
 import { requireAdmin } from '../auth';
+import { cancelClaim } from './items';
 
 export function registerParticipantRoutes(app: FastifyInstance, deps: AppDeps) {
   app.get('/participants', { preHandler: requireAdmin(deps) }, async () => {
@@ -51,17 +52,16 @@ export function registerParticipantRoutes(app: FastifyInstance, deps: AppDeps) {
 
       const activeClaims = deps.db
         .prepare(
-          `SELECT c.item_id as itemId, c.quantity as quantity
+          `SELECT c.item_id as itemId
            FROM claims c
            JOIN items i ON i.id = c.item_id
            JOIN events e ON e.id = i.event_id
            WHERE c.telegram_id = ? AND e.status = 'open'`
         )
-        .all(telegramId) as { itemId: number; quantity: number }[];
+        .all(telegramId) as { itemId: number }[];
 
       for (const claim of activeClaims) {
-        deps.db.prepare('DELETE FROM claims WHERE item_id = ? AND telegram_id = ?').run(claim.itemId, telegramId);
-        deps.db.prepare("UPDATE items SET quantity = quantity + ?, status = 'pool' WHERE id = ?").run(claim.quantity, claim.itemId);
+        cancelClaim(deps, claim.itemId, telegramId);
       }
     });
     banUser();

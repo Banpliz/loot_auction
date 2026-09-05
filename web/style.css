@@ -419,6 +419,17 @@ button {
   letter-spacing: 0.03em;
 }
 
+.kick-btn {
+  border: none;
+  background: none;
+  color: var(--danger);
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0 0.15rem;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
 /* --- Countdown banner --- */
 .countdown {
   background: var(--primary-tint);

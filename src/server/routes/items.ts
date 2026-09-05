@@ -83,6 +83,24 @@ function isPastDeadline(deps: AppDeps, eventId: number): boolean {
 // Tallies this user's current claims for the event by win-limit-group key (see
 // winLimitGroup in events.ts) — the live, per-attempt equivalent of the counter the old
 // end-of-event draw used to build once over the whole claimant pool.
+// Shared by self-unclaim, the admin per-lot kick below, and participants.ts's ban
+// cascade — all three are "give this claim's units back and reopen the lot," differing
+// only in who's allowed to trigger it and under what guard. Returns whether a claim
+// actually existed to cancel.
+export function cancelClaim(deps: AppDeps, itemId: number, telegramId: number): boolean {
+  return deps.db.transaction(() => {
+    const claim = deps.db.prepare('SELECT quantity FROM claims WHERE item_id = ? AND telegram_id = ?').get(itemId, telegramId) as
+      | { quantity: number }
+      | undefined;
+    if (!claim) return false;
+    deps.db.prepare('DELETE FROM claims WHERE item_id = ? AND telegram_id = ?').run(itemId, telegramId);
+    // Giving the units back always returns the lot to 'pool', even if claiming it was
+    // what had taken it to 'auctioned' (sold out) — the quantity math is symmetric.
+    deps.db.prepare("UPDATE items SET quantity = quantity + ?, status = 'pool' WHERE id = ?").run(claim.quantity, itemId);
+    return true;
+  })();
+}
+
 function getUserGroupCounts(deps: AppDeps, eventId: number, userId: number): Map<string, number> {
   const rows = deps.db
     .prepare(
@@ -378,18 +396,37 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
       }
     }
 
-    const unclaimUnit = deps.db.transaction(() => {
-      const claim = deps.db.prepare('SELECT quantity FROM claims WHERE item_id = ? AND telegram_id = ?').get(itemId, userId) as
-        | { quantity: number }
-        | undefined;
-      const result = deps.db.prepare('DELETE FROM claims WHERE item_id = ? AND telegram_id = ?').run(itemId, userId);
-      if (result.changes > 0 && item && claim) {
-        // Giving the units back always returns the lot to 'pool', even if claiming it was
-        // what had taken it to 'auctioned' (sold out) — the quantity math is symmetric.
-        deps.db.prepare("UPDATE items SET quantity = quantity + ?, status = 'pool' WHERE id = ?").run(claim.quantity, itemId);
-      }
-    });
-    unclaimUnit();
+    cancelClaim(deps, itemId, userId);
     return { ok: true };
   });
+
+  // Admin override of the same unclaim, targetable at anyone's claim (not just your own),
+  // for fixing a mistaken bid without banning the person from the app entirely. Only while
+  // the event is still open — once it's resolved, claims represent the finished, real
+  // outcome and shouldn't be rewritten (same rule participants.ts's ban cascade follows).
+  app.delete<{ Params: { id: string; telegramId: string } }>(
+    '/items/:id/claims/:telegramId',
+    { preHandler: requireAdmin(deps) },
+    async (request, reply) => {
+      const itemId = Number(request.params.id);
+      const telegramId = Number(request.params.telegramId);
+
+      const item = deps.db.prepare('SELECT event_id FROM items WHERE id = ?').get(itemId) as { event_id: number } | undefined;
+      if (!item) {
+        reply.code(404).send({ error: 'item not found' });
+        return;
+      }
+      const event = deps.db.prepare('SELECT status FROM events WHERE id = ?').get(item.event_id) as { status: string } | undefined;
+      if (event?.status !== 'open') {
+        reply.code(409).send({ error: 'event is not open' });
+        return;
+      }
+
+      if (!cancelClaim(deps, itemId, telegramId)) {
+        reply.code(404).send({ error: 'claim not found' });
+        return;
+      }
+      return { ok: true };
+    }
+  );
 }

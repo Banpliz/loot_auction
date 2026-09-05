@@ -239,6 +239,74 @@ describe('items routes', () => {
     expect(claimRow.count).toBe(0);
   });
 
+  it("DELETE /items/:id/claims/:telegramId (admin kick) is admin-only", async () => {
+    db.prepare("UPDATE events SET status = 'open' WHERE id = ?").run(eventId);
+    await app.inject({ method: 'POST', url: `/api/items/${itemAId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/api/items/${itemAId}/claims/2`,
+      headers: { 'x-telegram-init-data': bobInitData },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('admin can kick a specific person off a lot, returning their units without touching other claimants', async () => {
+    db.prepare("UPDATE events SET status = 'open' WHERE id = ?").run(eventId);
+    db.prepare('UPDATE items SET quantity = 2 WHERE id = ?').run(itemAId);
+    await app.inject({ method: 'POST', url: `/api/items/${itemAId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
+    await app.inject({ method: 'POST', url: `/api/items/${itemAId}/claim`, headers: { 'x-telegram-init-data': bobInitData } });
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/api/items/${itemAId}/claims/2`,
+      headers: { 'x-telegram-init-data': adminInitData },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const item = db.prepare('SELECT quantity, status FROM items WHERE id = ?').get(itemAId) as any;
+    expect(item.quantity).toBe(1);
+    expect(item.status).toBe('pool');
+
+    const aliceClaim = db.prepare('SELECT COUNT(*) as count FROM claims WHERE item_id = ? AND telegram_id = 2').get(itemAId) as any;
+    expect(aliceClaim.count).toBe(0);
+    const bobClaim = db.prepare('SELECT COUNT(*) as count FROM claims WHERE item_id = ? AND telegram_id = 3').get(itemAId) as any;
+    expect(bobClaim.count).toBe(1); // untouched
+  });
+
+  it('admin kick returns 404 when that person has no claim on the lot', async () => {
+    db.prepare("UPDATE events SET status = 'open' WHERE id = ?").run(eventId);
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/api/items/${itemAId}/claims/2`,
+      headers: { 'x-telegram-init-data': adminInitData },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('admin kick returns 404 for a nonexistent item', async () => {
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/api/items/999999/claims/2`,
+      headers: { 'x-telegram-init-data': adminInitData },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('admin kick is rejected once the event is resolved, leaving the claim intact', async () => {
+    db.prepare("UPDATE events SET status = 'open' WHERE id = ?").run(eventId);
+    await app.inject({ method: 'POST', url: `/api/items/${itemAId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
+    db.prepare("UPDATE events SET status = 'resolved' WHERE id = ?").run(eventId);
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/api/items/${itemAId}/claims/2`,
+      headers: { 'x-telegram-init-data': adminInitData },
+    });
+    expect(res.statusCode).toBe(409);
+    const aliceClaim = db.prepare('SELECT COUNT(*) as count FROM claims WHERE item_id = ? AND telegram_id = 2').get(itemAId) as any;
+    expect(aliceClaim.count).toBe(1);
+  });
+
   it('unclaiming an item nobody claimed leaves quantity untouched', async () => {
     db.prepare("UPDATE events SET status = 'open' WHERE id = ?").run(eventId);
     const res = await app.inject({ method: 'DELETE', url: `/api/items/${itemAId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });

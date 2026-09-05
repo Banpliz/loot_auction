@@ -271,6 +271,14 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
     });
   }
 
+  // A winner can be kicked off their claim (returning the unit to the pool) only while
+  // the event is still open — once resolved, claims are the finished, real outcome and
+  // shouldn't be rewritten (see the DELETE /items/:id/claims/:telegramId doc comment).
+  const winnerEntry = (item: AdminItem, w: Winner) =>
+    status === 'open'
+      ? `${winnerLabel(w)} <button type="button" class="kick-btn" data-action="kick" data-item-id="${item.id}" data-telegram-id="${w.telegramId}" title="Убрать с этого лота">×</button>`
+      : winnerLabel(w);
+
   function renderReadOnlyItems() {
     const itemsEl = root.querySelector('#event-items') as HTMLElement;
     if (allItems.length === 0) {
@@ -287,11 +295,25 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
           <p>${escapeHtml(item.name) || '—'}</p>
           <span class="status-pill">
             ${colorLabel} · ${categoryLabel} · Осталось ${item.quantity} · ${STATUS_LABEL[item.status]}
-            ${item.winners.length > 0 ? ' · ' + item.winners.map(winnerLabel).join(', ') : ''}
+            ${item.winners.length > 0 ? ' · ' + item.winners.map((w) => winnerEntry(item, w)).join(', ') : ''}
           </span>
         </div>`;
       })
       .join('')}</div>`;
+
+    itemsEl.querySelectorAll('[data-action="kick"]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        if (!confirm('Убрать этого участника с лота? Единица вернётся в пул.')) return;
+        const itemId = (button as HTMLElement).dataset.itemId;
+        const telegramId = (button as HTMLElement).dataset.telegramId;
+        try {
+          await apiFetch(`/items/${itemId}/claims/${telegramId}`, { method: 'DELETE' });
+          await loadItems();
+        } catch (err) {
+          alert((err as Error).message);
+        }
+      });
+    });
   }
 
   async function loadItems() {
