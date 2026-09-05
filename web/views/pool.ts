@@ -79,6 +79,13 @@ export async function renderPool(root: HTMLElement) {
   root.innerHTML = '<p class="spinner-text">Загрузка…</p>';
 
   const data = await apiFetch('/events/current');
+  // The 10s pre-start countdown compares a server-issued timestamp (starts_at) against
+  // this device's own clock — if the phone's clock is off by even a few seconds, that
+  // alone can make the countdown skip straight to "started" (or never seem to end).
+  // Correct for it once per load using the server's own clock, sent alongside the data.
+  const clockOffsetMs = data.serverNow ? new Date(data.serverNow).getTime() - Date.now() : 0;
+  const now = () => Date.now() + clockOffsetMs;
+
   if (!data.event) {
     root.innerHTML = '<p class="empty-state">Пока нет активного ивента.</p>';
     // No event yet doesn't mean none ever will be — an admin starting one should show up
@@ -96,12 +103,12 @@ export async function renderPool(root: HTMLElement) {
 
   const deadlineEl = root.querySelector('#deadline') as HTMLElement;
   const deadlineAt: Date | null = data.event.deadlineAt ? new Date(data.event.deadlineAt) : null;
-  let biddingClosed = deadlineAt ? deadlineAt.getTime() < Date.now() : false;
+  let biddingClosed = deadlineAt ? deadlineAt.getTime() < now() : false;
   // A short countdown before bidding actually opens (see events.ts's /start) — every
   // participant sees the same "starts in N..." and the lot list reveals for everyone at
   // the same moment, instead of whoever refreshed first getting a head start on claiming.
   const startsAt: Date | null = data.event.startsAt ? new Date(data.event.startsAt) : null;
-  let biddingStarted = !startsAt || startsAt.getTime() <= Date.now();
+  let biddingStarted = !startsAt || startsAt.getTime() <= now();
 
   const allItems = data.items as Item[];
   const listEl = root.querySelector('.lots') as HTMLElement;
@@ -224,8 +231,8 @@ export async function renderPool(root: HTMLElement) {
 
   const updateCountdown = () => {
     if (!biddingStarted) {
-      const secsLeft = Math.max(1, Math.ceil((startsAt!.getTime() - Date.now()) / 1000));
-      if (startsAt!.getTime() > Date.now()) {
+      const secsLeft = Math.max(1, Math.ceil((startsAt!.getTime() - now()) / 1000));
+      if (startsAt!.getTime() > now()) {
         deadlineEl.textContent = `Аукцион начнётся через ${secsLeft}…`;
         return;
       }
@@ -237,7 +244,7 @@ export async function renderPool(root: HTMLElement) {
       deadlineEl.style.display = 'none';
       return;
     }
-    const msLeft = deadlineAt.getTime() - Date.now();
+    const msLeft = deadlineAt.getTime() - now();
     deadlineEl.textContent =
       msLeft > 0
         ? `⏳ Приём заявок до ${deadlineAt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`

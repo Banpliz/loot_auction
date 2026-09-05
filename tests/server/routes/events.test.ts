@@ -54,7 +54,15 @@ describe('events routes', () => {
 
   it('GET /events/current returns null when there is no event yet', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/events/current', headers: { 'x-telegram-init-data': memberInitData } });
-    expect(res.json()).toEqual({ event: null, items: [] });
+    expect(res.json()).toMatchObject({ event: null, items: [] });
+  });
+
+  it('GET /events/current reports its own clock so the client can correct for device clock drift', async () => {
+    const before = Date.now();
+    const res = await app.inject({ method: 'GET', url: '/api/events/current', headers: { 'x-telegram-init-data': memberInitData } });
+    const serverNowMs = new Date(res.json().serverNow).getTime();
+    expect(serverNowMs).toBeGreaterThanOrEqual(before);
+    expect(serverNowMs).toBeLessThanOrEqual(Date.now());
   });
 
   it('GET /events/current excludes draft events, even when they are the most recently created', async () => {

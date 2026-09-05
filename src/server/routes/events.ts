@@ -135,7 +135,12 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
     const event = deps.db.prepare("SELECT * FROM events WHERE status != 'draft' ORDER BY id DESC LIMIT 1").get() as
       | EventRow
       | undefined;
-    if (!event) return { event: null, items: [] };
+    // A viewer's device clock can drift from the server's by more than the pre-start
+    // countdown window itself (see /start's starts_at) — sent on every response so the
+    // client can correct for it instead of comparing starts_at/deadlineAt against its own
+    // possibly-wrong Date.now().
+    const serverNow = new Date().toISOString();
+    if (!event) return { event: null, items: [], serverNow };
 
     const userId = request.telegramUser!.telegramId;
     const items = deps.db
@@ -152,6 +157,7 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
     return {
       event: { id: event.id, title: event.title, deadlineAt: event.deadline_at, startsAt: event.starts_at, status: event.status },
       items: attachWinners(deps, items),
+      serverNow,
     };
   });
 
