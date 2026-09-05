@@ -265,6 +265,34 @@ describe('events routes', () => {
     expect(unclaimed.winners).toEqual([]);
   });
 
+  it("GET /events/current and GET /events/:id report each item's screenshot template", async () => {
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/events',
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { title: 'Вторжение' },
+    });
+    const eventId = createRes.json().id;
+    const screenshot = db
+      .prepare("INSERT INTO screenshots (event_id, original_path, rows, template, uploaded_by) VALUES (?, ?, 1, 'invasion', 1)")
+      .run(eventId, '/tmp/inv.png');
+    const item = db
+      .prepare("INSERT INTO items (event_id, screenshot_id, name, image_path, status, color) VALUES (?, ?, 'Огр', 'items/a.png', 'pool', 'blue')")
+      .run(eventId, screenshot.lastInsertRowid);
+    await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/start`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { durationMinutes: 25 },
+    });
+
+    const poolRes = await app.inject({ method: 'GET', url: '/api/events/current', headers: { 'x-telegram-init-data': memberInitData } });
+    expect(poolRes.json().items.find((i: any) => i.id === item.lastInsertRowid).template).toBe('invasion');
+
+    const adminRes = await app.inject({ method: 'GET', url: `/api/events/${eventId}`, headers: { 'x-telegram-init-data': adminInitData } });
+    expect(adminRes.json().items.find((i: any) => i.id === item.lastInsertRowid).template).toBe('invasion');
+  });
+
   it('winners list reports how many units a claim reserved', async () => {
     const createRes = await app.inject({
       method: 'POST',

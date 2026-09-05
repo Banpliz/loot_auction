@@ -7,6 +7,7 @@ import { requireAdmin } from '../auth';
 import { computeIconSignature, isGenericChestIcon } from '../dedup';
 import { rememberLot } from '../lot-library';
 import { winLimitGroup } from './events';
+import { isTemplate } from '../layout-templates';
 
 const VALID_COLORS = new Set(['blue', 'purple', 'red']);
 const VALID_CATEGORIES = new Set(['item', 'stone']);
@@ -33,14 +34,18 @@ async function ensureManualPlaceholderImage(deps: AppDeps): Promise<void> {
 }
 
 // One synthetic screenshot row per event backs every manual lot in it (screenshot_id is
-// NOT NULL on items — see db.ts). Its template mirrors whatever real screenshot the event
-// already has, so winLimitGroup (events.ts) applies the same win-limit rule to manual lots
-// as to the rest of the event; with no real screenshot yet, 'feast' is the arbitrary default.
-function getOrCreateManualScreenshot(deps: AppDeps, eventId: number, userId: number): number {
-  const existing = deps.db
+// NOT NULL on items — see db.ts). Its template decides which win-limit rule winLimitGroup
+// (events.ts) applies to every manual lot in the event — feast groups by category, invasion
+// caps blue at 2 — so getting it wrong silently breaks the cap a participant expects (e.g.
+// a blue manual lot that can't actually be claimed 2-at-a-time). Priority: an event that
+// already has a real screenshot keeps that one's template, so manual lots never disagree
+// with the rest of the event; otherwise the admin's own choice on this call; otherwise
+// whatever a previous manual lot in this event already picked; 'feast' only as a last resort.
+function getOrCreateManualScreenshot(deps: AppDeps, eventId: number, userId: number, requestedTemplate: string): number {
+  const existingManual = deps.db
     .prepare("SELECT id FROM screenshots WHERE event_id = ? AND original_path = 'manual'")
     .get(eventId) as { id: number } | undefined;
-  if (existing) return existing.id;
+  if (existingManual) return existingManual.id;
 
   const real = deps.db
     .prepare("SELECT template FROM screenshots WHERE event_id = ? AND original_path != 'manual' LIMIT 1")
@@ -48,7 +53,7 @@ function getOrCreateManualScreenshot(deps: AppDeps, eventId: number, userId: num
 
   return deps.db
     .prepare("INSERT INTO screenshots (event_id, original_path, rows, template, uploaded_by) VALUES (?, 'manual', 0, ?, ?)")
-    .run(eventId, real?.template ?? 'feast', userId).lastInsertRowid as number;
+    .run(eventId, real?.template ?? requestedTemplate, userId).lastInsertRowid as number;
 }
 
 // Editing (name/color/category/quantity, remove, merge) is only allowed while the event
@@ -175,7 +180,7 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
     }
   );
 
-  app.post<{ Params: { id: string }; Body: { name?: string; quantity?: number; color?: string } }>(
+  app.post<{ Params: { id: string }; Body: { name?: string; quantity?: number; color?: string; template?: string } }>(
     '/events/:id/items/manual',
     { preHandler: requireAdmin(deps) },
     async (request, reply) => {
@@ -185,7 +190,7 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
         return;
       }
 
-      const { name, quantity, color } = request.body ?? {};
+      const { name, quantity, color, template = 'feast' } = request.body ?? {};
       if (!color || !VALID_COLORS.has(color)) {
         reply.code(400).send({ error: 'color must be blue, purple, or red' });
         return;
@@ -194,10 +199,14 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
         reply.code(400).send({ error: 'quantity must be a positive integer' });
         return;
       }
+      if (!isTemplate(template)) {
+        reply.code(400).send({ error: 'template must be feast or invasion' });
+        return;
+      }
 
       const userId = request.telegramUser!.telegramId;
       await ensureManualPlaceholderImage(deps);
-      const screenshotId = getOrCreateManualScreenshot(deps, eventId, userId);
+      const screenshotId = getOrCreateManualScreenshot(deps, eventId, userId, template);
 
       deps.db
         .prepare(

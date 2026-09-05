@@ -18,6 +18,7 @@ interface Item {
   status: 'pool' | 'auctioned' | 'removed';
   winners: Winner[];
   claimedByMe: number;
+  template: string;
 }
 
 let countdownTimer: ReturnType<typeof setInterval> | undefined;
@@ -52,13 +53,14 @@ export async function renderPool(root: HTMLElement) {
   const allItems = data.items as Item[];
   const listEl = root.querySelector('.lots') as HTMLElement;
 
-  // Blue lots allow winning up to 2 units per event (see winLimitGroup in events.ts),
-  // so — unlike every other lot, claimed one unit at a time — a blue lot with at least
-  // 2 left offers a quick -1+ stepper to reserve both in a single claim. The server still
-  // enforces the real cap (someone already holding 1 blue elsewhere gets a plain error).
+  // Invasion's blue lots allow winning up to 2 units per event (see winLimitGroup in
+  // events.ts), so — unlike every other lot, claimed one unit at a time — a blue lot with
+  // at least 2 left offers a quick -1+ stepper to reserve both in a single claim. This only
+  // applies under the invasion win-limit rule: feast groups its cap by category instead, so
+  // a feast lot's color says nothing about how many of it one person may take.
   const claimControl = (item: Item) => {
     const maxPick = Math.min(item.quantity, 2);
-    if (item.color === 'blue' && maxPick > 1) {
+    if (item.template === 'invasion' && item.color === 'blue' && maxPick > 1) {
       return `
         <div class="claim-stepper" data-max="${maxPick}" data-qty="1">
           <button type="button" data-action="stepper-dec" class="btn-sm btn-secondary">−</button>

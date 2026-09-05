@@ -117,6 +117,10 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
           <select id="manual-lot-color">
             ${ITEM_COLORS.map((c) => `<option value="${c.value}">${c.label}</option>`).join('')}
           </select>
+          <select id="manual-lot-template" title="Определяет правило лимита побед: «Пир» — по категории, «Вторжение» — по цвету (синий даёт до 2 шт за раз)">
+            <option value="feast">Пир победы</option>
+            <option value="invasion">Вторжение</option>
+          </select>
         </div>
         <button type="submit" class="btn-block btn-sm">Добавить</button>
       </form>
@@ -409,11 +413,12 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
       const name = (root.querySelector('#manual-lot-name') as HTMLInputElement).value;
       const quantity = Number((root.querySelector('#manual-lot-quantity') as HTMLInputElement).value);
       const color = (root.querySelector('#manual-lot-color') as HTMLSelectElement).value;
+      const template = (root.querySelector('#manual-lot-template') as HTMLSelectElement).value;
       try {
         await apiFetch(`/events/${eventId}/items/manual`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ name, quantity, color }),
+          body: JSON.stringify({ name, quantity, color, template }),
         });
         manualForm.reset();
         manualForm.style.display = 'none';

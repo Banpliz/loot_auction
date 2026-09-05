@@ -576,11 +576,50 @@ describe('POST /events/:id/items/manual', () => {
       method: 'POST',
       url: `/api/events/${eventId}/items/manual`,
       headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
-      payload: { quantity: 1, color: 'blue' },
+      // Passing 'feast' here must be ignored — the event already has a real invasion
+      // screenshot, and mixing win-limit rules within one event would be a worse bug
+      // than not letting the admin override it.
+      payload: { quantity: 1, color: 'blue', template: 'feast' },
     });
     const manualScreenshot = db
       .prepare("SELECT template FROM screenshots WHERE event_id = ? AND original_path = 'manual'")
       .get(eventId) as any;
     expect(manualScreenshot.template).toBe('invasion');
+  });
+
+  it('uses the admin-chosen template for a pure-manual event with no real screenshot yet', async () => {
+    await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/items/manual`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { quantity: 1, color: 'blue', template: 'invasion' },
+    });
+    const manualScreenshot = db
+      .prepare("SELECT template FROM screenshots WHERE event_id = ? AND original_path = 'manual'")
+      .get(eventId) as any;
+    expect(manualScreenshot.template).toBe('invasion');
+  });
+
+  it('defaults to feast when no template is given and no real screenshot exists', async () => {
+    await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/items/manual`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { quantity: 1, color: 'blue' },
+    });
+    const manualScreenshot = db
+      .prepare("SELECT template FROM screenshots WHERE event_id = ? AND original_path = 'manual'")
+      .get(eventId) as any;
+    expect(manualScreenshot.template).toBe('feast');
+  });
+
+  it('rejects an invalid template', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/items/manual`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { quantity: 1, color: 'blue', template: 'nonsense' },
+    });
+    expect(res.statusCode).toBe(400);
   });
 });
