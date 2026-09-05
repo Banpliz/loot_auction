@@ -266,14 +266,31 @@ describe('items routes', () => {
       expect((await app.inject({ method: 'POST', url: `/api/items/${purpleB}/claim`, headers: { 'x-telegram-init-data': aliceInitData } })).statusCode).toBe(409);
     });
 
-    it('lets an officer claim purple twice in the same day', async () => {
+    it('caps everyone — including officers — at 1 purple claim per event, even under their daily allowance', async () => {
       db.prepare("UPDATE users SET rank = 'officer' WHERE telegram_id = 2").run();
       const purpleA = insertPurple('Purple A');
       const purpleB = insertPurple('Purple B');
-      const purpleC = insertPurple('Purple C');
       expect((await app.inject({ method: 'POST', url: `/api/items/${purpleA}/claim`, headers: { 'x-telegram-init-data': aliceInitData } })).statusCode).toBe(200);
-      expect((await app.inject({ method: 'POST', url: `/api/items/${purpleB}/claim`, headers: { 'x-telegram-init-data': aliceInitData } })).statusCode).toBe(200);
-      expect((await app.inject({ method: 'POST', url: `/api/items/${purpleC}/claim`, headers: { 'x-telegram-init-data': aliceInitData } })).statusCode).toBe(409);
+      // Still only their first purple claim of the day (daily allowance is 2) — rejected
+      // purely by the per-event cap, which is 1 for everyone regardless of rank.
+      expect((await app.inject({ method: 'POST', url: `/api/items/${purpleB}/claim`, headers: { 'x-telegram-init-data': aliceInitData } })).statusCode).toBe(409);
+    });
+
+    it("lets an officer's second daily purple claim through as long as it's in a different event", async () => {
+      db.prepare("UPDATE users SET rank = 'officer' WHERE telegram_id = 2").run();
+      const secondEventId = db.prepare("INSERT INTO events (title, status) VALUES ('Вторжение 2', 'open')").run().lastInsertRowid as number;
+      const secondScreenshotId = db
+        .prepare("INSERT INTO screenshots (event_id, original_path, rows, template, uploaded_by) VALUES (?, ?, 1, 'invasion', 1)")
+        .run(secondEventId, '/tmp/purple3.png').lastInsertRowid as number;
+      const purpleInEventOne = insertPurple('Purple 1');
+      const purpleInEventTwo = db
+        .prepare(
+          "INSERT INTO items (event_id, screenshot_id, name, image_path, status, color) VALUES (?, ?, 'Purple 2', 'items/z.png', 'pool', 'purple')"
+        )
+        .run(secondEventId, secondScreenshotId).lastInsertRowid as number;
+
+      expect((await app.inject({ method: 'POST', url: `/api/items/${purpleInEventOne}/claim`, headers: { 'x-telegram-init-data': aliceInitData } })).statusCode).toBe(200);
+      expect((await app.inject({ method: 'POST', url: `/api/items/${purpleInEventTwo}/claim`, headers: { 'x-telegram-init-data': aliceInitData } })).statusCode).toBe(200);
     });
 
     it('counts across different events on the same day, not per event', async () => {
@@ -302,8 +319,19 @@ describe('items routes', () => {
     });
 
     it("doesn't count a claim from a previous day against today's limit", async () => {
+      // A second event so the per-event cap (1, regardless of day) can't be what lets
+      // purpleB's claim through — only the daily-boundary logic is under test here.
+      const secondEventId = db.prepare("INSERT INTO events (title, status) VALUES ('Вторжение 2', 'open')").run().lastInsertRowid as number;
+      const secondScreenshotId = db
+        .prepare("INSERT INTO screenshots (event_id, original_path, rows, template, uploaded_by) VALUES (?, ?, 1, 'invasion', 1)")
+        .run(secondEventId, '/tmp/purple4.png').lastInsertRowid as number;
       const purpleA = insertPurple('Purple A');
-      const purpleB = insertPurple('Purple B');
+      const purpleB = db
+        .prepare(
+          "INSERT INTO items (event_id, screenshot_id, name, image_path, status, color) VALUES (?, ?, 'Purple B', 'items/w.png', 'pool', 'purple')"
+        )
+        .run(secondEventId, secondScreenshotId).lastInsertRowid as number;
+
       const claimA = await app.inject({ method: 'POST', url: `/api/items/${purpleA}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
       expect(claimA.statusCode).toBe(200);
       // Backdate the claim itself, as if it had been made yesterday.

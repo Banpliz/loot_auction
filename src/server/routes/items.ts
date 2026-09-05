@@ -156,6 +156,26 @@ function getPurpleClaimedToday(deps: AppDeps, userId: number): number {
   return row.total;
 }
 
+const PURPLE_PER_EVENT_LIMIT = 1;
+
+// The daily allowance (1 or 2, by rank) is a ceiling across the whole day, not a budget
+// to spend however you like — everyone, officers included, can still only walk away with
+// one purple lot from any single event. Otherwise an officer could burn both of a day's
+// purple claims in one event, which is exactly the "unfair to regular members" outcome
+// the alliance's rule is meant to prevent.
+function getUserPurpleClaimedInEvent(deps: AppDeps, eventId: number, userId: number): number {
+  const row = deps.db
+    .prepare(
+      `SELECT COALESCE(SUM(c.quantity), 0) as total
+       FROM claims c
+       JOIN items i ON i.id = c.item_id
+       JOIN screenshots s ON s.id = i.screenshot_id
+       WHERE c.telegram_id = ? AND i.event_id = ? AND i.color = 'purple' AND s.template = 'invasion'`
+    )
+    .get(userId, eventId) as { total: number };
+  return row.total;
+}
+
 function getUserGroupCounts(deps: AppDeps, eventId: number, userId: number): Map<string, number> {
   const rows = deps.db
     .prepare(
@@ -414,9 +434,15 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
       return;
     }
 
-    // Invasion purple has its own rule — a daily cap by rank, across every event, not a
-    // per-event one — so it skips winLimitGroup/getUserGroupCounts entirely.
+    // Invasion purple has its own rule — a daily cap by rank, across every event, plus a
+    // flat 1-per-event ceiling that applies to everyone regardless of rank (see
+    // getUserPurpleClaimedInEvent) — so it skips winLimitGroup/getUserGroupCounts entirely.
     if (item.template === 'invasion' && item.color === 'purple') {
+      const claimedInEvent = getUserPurpleClaimedInEvent(deps, item.event_id, userId);
+      if (claimedInEvent + quantity > PURPLE_PER_EVENT_LIMIT) {
+        reply.code(409).send({ error: 'win limit reached' });
+        return;
+      }
       const dailyLimit = isOfficerRank(deps, userId) ? OFFICER_DAILY_PURPLE_LIMIT : MEMBER_DAILY_PURPLE_LIMIT;
       const claimedToday = getPurpleClaimedToday(deps, userId);
       if (claimedToday + quantity > dailyLimit) {
