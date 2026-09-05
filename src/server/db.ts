@@ -49,6 +49,7 @@ function migrate(db: Db) {
       id INTEGER PRIMARY KEY,
       title TEXT NOT NULL,
       deadline_at TEXT,
+      starts_at TEXT,
       status TEXT NOT NULL DEFAULT 'open',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -133,5 +134,14 @@ function migrate(db: Db) {
   const userColumns = db.prepare('PRAGMA table_info(users)').all() as { name: string }[];
   if (!userColumns.some((c) => c.name === 'status')) {
     db.exec(`ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'`);
+  }
+
+  // Additive column: a short countdown before bidding actually opens (see events.ts's
+  // /start), so every participant sees the same synchronized reveal instead of whoever
+  // refreshed first getting a head start. NULL on existing rows means "already started" —
+  // an event opened before this feature shipped was never meant to have one.
+  const eventColumns = db.prepare('PRAGMA table_info(events)').all() as { name: string }[];
+  if (!eventColumns.some((c) => c.name === 'starts_at')) {
+    db.exec(`ALTER TABLE events ADD COLUMN starts_at TEXT`);
   }
 }

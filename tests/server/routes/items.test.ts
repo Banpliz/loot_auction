@@ -132,6 +132,22 @@ describe('items routes', () => {
     expect(res.statusCode).toBe(409);
   });
 
+  it('claiming before starts_at is rejected even though the event is already open', async () => {
+    const futureStart = new Date(Date.now() + 10_000).toISOString();
+    db.prepare("UPDATE events SET status = 'open', starts_at = ? WHERE id = ?").run(futureStart, eventId);
+    const res = await app.inject({ method: 'POST', url: `/api/items/${itemAId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
+    expect(res.statusCode).toBe(409);
+    const row = db.prepare('SELECT quantity FROM items WHERE id = ?').get(itemAId) as any;
+    expect(row.quantity).toBe(1); // unchanged
+  });
+
+  it('claiming succeeds once starts_at has passed', async () => {
+    const pastStart = new Date(Date.now() - 1000).toISOString();
+    db.prepare("UPDATE events SET status = 'open', starts_at = ? WHERE id = ?").run(pastStart, eventId);
+    const res = await app.inject({ method: 'POST', url: `/api/items/${itemAId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
+    expect(res.statusCode).toBe(200);
+  });
+
   it('claiming an item in a draft (not-yet-started) event is rejected', async () => {
     // eventId is 'draft' by default from beforeEach — no override here.
     const res = await app.inject({ method: 'POST', url: `/api/items/${itemAId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });

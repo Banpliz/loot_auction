@@ -115,6 +115,56 @@ describe('events routes', () => {
     expect(new Date(row.deadline_at).getTime()).toBeGreaterThan(Date.now());
   });
 
+  it('POST /events/:id/start sets a short starts_at countdown and counts the bidding duration from it, not from now', async () => {
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/events',
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { title: 'Ивент' },
+    });
+    const eventId = createRes.json().id;
+
+    const before = Date.now();
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/start`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { durationMinutes: 25 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().startsAt).not.toBeNull();
+
+    const row = db.prepare('SELECT starts_at, deadline_at FROM events WHERE id = ?').get(eventId) as any;
+    const startsAtMs = new Date(row.starts_at).getTime();
+    const deadlineAtMs = new Date(row.deadline_at).getTime();
+    // Starts a few seconds out (not immediately), and the full 25 minutes remains
+    // available for bidding starting from that moment — not shortened by the countdown.
+    expect(startsAtMs).toBeGreaterThan(before);
+    expect(deadlineAtMs - startsAtMs).toBeCloseTo(25 * 60_000, -2);
+  });
+
+  it("GET /events/current and GET /events/:id report the event's startsAt", async () => {
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/events',
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { title: 'Ивент' },
+    });
+    const eventId = createRes.json().id;
+    await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/start`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { durationMinutes: 25 },
+    });
+
+    const poolRes = await app.inject({ method: 'GET', url: '/api/events/current', headers: { 'x-telegram-init-data': memberInitData } });
+    expect(poolRes.json().event.startsAt).not.toBeNull();
+
+    const adminRes = await app.inject({ method: 'GET', url: `/api/events/${eventId}`, headers: { 'x-telegram-init-data': adminInitData } });
+    expect(adminRes.json().event.startsAt).not.toBeNull();
+  });
+
   it('POST /events/:id/start rejects a missing/zero durationMinutes and starting twice', async () => {
     const createRes = await app.inject({
       method: 'POST',

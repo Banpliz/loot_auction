@@ -7,8 +7,11 @@ interface EventRow {
   id: number;
   title: string;
   deadline_at: string | null;
+  starts_at: string | null;
   status: string;
 }
+
+const START_DELAY_MS = 10_000;
 
 type ColorGroup = 'purpleRed' | 'blue';
 type CategoryGroup = 'item' | 'stone';
@@ -147,7 +150,7 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
       .all(userId, event.id) as { id: number }[];
 
     return {
-      event: { id: event.id, title: event.title, deadlineAt: event.deadline_at, status: event.status },
+      event: { id: event.id, title: event.title, deadlineAt: event.deadline_at, startsAt: event.starts_at, status: event.status },
       items: attachWinners(deps, items),
     };
   });
@@ -170,7 +173,7 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
       .all(eventId) as { id: number }[];
 
     return {
-      event: { id: event.id, title: event.title, deadlineAt: event.deadline_at, status: event.status },
+      event: { id: event.id, title: event.title, deadlineAt: event.deadline_at, startsAt: event.starts_at, status: event.status },
       items: attachWinners(deps, items),
     };
   });
@@ -196,10 +199,16 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
         return;
       }
 
-      const deadlineAt = new Date(Date.now() + (durationMinutes as number) * 60_000).toISOString();
-      deps.db.prepare("UPDATE events SET status = 'open', deadline_at = ? WHERE id = ?").run(deadlineAt, eventId);
+      // A short synchronized countdown before bidding actually opens — every participant
+      // sees the same "starts in N..." and the lot list reveals for everyone at once,
+      // instead of whoever happened to refresh first getting a head start on claiming.
+      // The announced duration counts from starts_at, not from this click, so it isn't
+      // quietly shortened by the countdown.
+      const startsAt = new Date(Date.now() + START_DELAY_MS).toISOString();
+      const deadlineAt = new Date(Date.parse(startsAt) + (durationMinutes as number) * 60_000).toISOString();
+      deps.db.prepare("UPDATE events SET status = 'open', starts_at = ?, deadline_at = ? WHERE id = ?").run(startsAt, deadlineAt, eventId);
       publishChange();
-      return { ok: true, deadlineAt };
+      return { ok: true, startsAt, deadlineAt };
     }
   );
 

@@ -81,6 +81,16 @@ function isPastDeadline(deps: AppDeps, eventId: number): boolean {
   return !!event?.deadline_at && new Date(event.deadline_at).getTime() < Date.now();
 }
 
+// The short synchronized countdown events.ts's /start sets (starts_at) — an event can be
+// 'open' yet still be in that countdown, so the UI showing "starts in N..." isn't just
+// cosmetic; a claim sent straight to the API during it must be rejected server-side too.
+function isBeforeStart(deps: AppDeps, eventId: number): boolean {
+  const event = deps.db.prepare('SELECT starts_at FROM events WHERE id = ?').get(eventId) as
+    | { starts_at: string | null }
+    | undefined;
+  return !!event?.starts_at && new Date(event.starts_at).getTime() > Date.now();
+}
+
 // Tallies this user's current claims for the event by win-limit-group key (see
 // winLimitGroup in events.ts) — the live, per-attempt equivalent of the counter the old
 // end-of-event draw used to build once over the whole claimant pool.
@@ -349,6 +359,10 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
     // to actually mean anything.
     if (isPastDeadline(deps, item.event_id)) {
       reply.code(409).send({ error: 'bidding has ended' });
+      return;
+    }
+    if (isBeforeStart(deps, item.event_id)) {
+      reply.code(409).send({ error: 'bidding has not started yet' });
       return;
     }
 

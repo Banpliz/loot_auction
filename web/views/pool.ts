@@ -78,6 +78,11 @@ export async function renderPool(root: HTMLElement) {
   const deadlineEl = root.querySelector('#deadline') as HTMLElement;
   const deadlineAt: Date | null = data.event.deadlineAt ? new Date(data.event.deadlineAt) : null;
   let biddingClosed = deadlineAt ? deadlineAt.getTime() < Date.now() : false;
+  // A short countdown before bidding actually opens (see events.ts's /start) — every
+  // participant sees the same "starts in N..." and the lot list reveals for everyone at
+  // the same moment, instead of whoever refreshed first getting a head start on claiming.
+  const startsAt: Date | null = data.event.startsAt ? new Date(data.event.startsAt) : null;
+  let biddingStarted = !startsAt || startsAt.getTime() <= Date.now();
 
   const allItems = data.items as Item[];
   const listEl = root.querySelector('.lots') as HTMLElement;
@@ -194,9 +199,21 @@ export async function renderPool(root: HTMLElement) {
     });
   }
 
-  renderList();
+  // Nothing renders into .lots until the countdown above hits zero — see updateCountdown
+  // below, which reveals the list itself once biddingStarted flips true.
+  if (biddingStarted) renderList();
 
   const updateCountdown = () => {
+    if (!biddingStarted) {
+      const secsLeft = Math.max(1, Math.ceil((startsAt!.getTime() - Date.now()) / 1000));
+      if (startsAt!.getTime() > Date.now()) {
+        deadlineEl.textContent = `Аукцион начнётся через ${secsLeft}…`;
+        return;
+      }
+      biddingStarted = true;
+      renderList();
+    }
+
     if (!deadlineAt) {
       deadlineEl.style.display = 'none';
       return;
