@@ -53,10 +53,29 @@ const renderWinners = (label: string, winners: Winner[]) => `
     <p>${winners.map(winnerLabel).join(', ')}</p>
   </details>`;
 
+// Tears down the timers/SSE connection a render set up. Without this, switching to a
+// different tab (main.ts) left them running against this tab's old, now-detached content
+// — any later push (publishChange fires globally, for every action) called renderPool
+// again on that stale reference and clobbered whatever tab was actually on screen (e.g.
+// "Админ" would suddenly flip to "Пока нет активного ивента"). main.ts calls this before
+// switching away; renderPool itself calls it too, so re-entering "Лоты" is still safe.
+export function stopPool(): void {
+  if (countdownTimer) {
+    clearInterval(countdownTimer);
+    countdownTimer = undefined;
+  }
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = undefined;
+  }
+  if (eventSource) {
+    eventSource.close();
+    eventSource = undefined;
+  }
+}
+
 export async function renderPool(root: HTMLElement) {
-  if (countdownTimer) clearInterval(countdownTimer);
-  if (pollTimer) clearInterval(pollTimer);
-  if (eventSource) eventSource.close();
+  stopPool();
   root.innerHTML = '<p class="spinner-text">Загрузка…</p>';
 
   const data = await apiFetch('/events/current');

@@ -1,7 +1,7 @@
 // web/main.ts
 import { apiFetch } from './api';
 import { renderProfilePrompt, renderPendingScreen, renderBannedScreen } from './views/profile';
-import { renderPool } from './views/pool';
+import { renderPool, stopPool } from './views/pool';
 import { renderAdmin } from './views/admin';
 import { renderParticipants } from './views/participants';
 
@@ -61,9 +61,15 @@ function renderShell(root: HTMLElement, me: Me) {
       root.querySelectorAll('nav button').forEach((b) => b.classList.remove('active'));
       button.classList.add('active');
       const tab = button.getAttribute('data-tab');
-      if (tab === 'admin') renderAdmin(content);
-      else if (tab === 'participants') renderParticipants(content);
-      else renderPool(content);
+      if (tab === 'admin') {
+        stopPool();
+        renderAdmin(content);
+      } else if (tab === 'participants') {
+        stopPool();
+        renderParticipants(content);
+      } else {
+        renderPool(content);
+      }
     });
   });
 }
