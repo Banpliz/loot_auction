@@ -34,6 +34,19 @@ const POLL_FALLBACK_MS = 15000;
 
 const winnerLabel = (w: Winner) => escapeHtml(w.nickname ?? '—') + (w.quantity > 1 ? ` ×${w.quantity}` : '');
 
+// The API speaks in plain English error codes (items.ts) — translated here rather than
+// server-side so the wire format stays a stable identifier other code and tests can match
+// on. Most of these fire when two people click the same lot within the live-update window.
+const CLAIM_ERROR_MESSAGES: Record<string, string> = {
+  'item is not claimable': 'Лот уже занят или недоступен — список сейчас обновится.',
+  'not enough remaining quantity': 'Осталось меньше, чем ты выбрал — список сейчас обновится.',
+  'already claimed': 'Ты уже сделал ставку на этот лот.',
+  'win limit reached': 'Достигнут лимит побед для этой редкости/категории.',
+  'already won in the other category': 'Нельзя — ты уже выиграл в другой категории.',
+  'bidding has ended': 'Приём заявок уже завершён.',
+};
+const claimErrorMessage = (message: string) => CLAIM_ERROR_MESSAGES[message] ?? message;
+
 const renderWinners = (label: string, winners: Winner[]) => `
   <details class="winners">
     <summary>${label} (${winners.length})</summary>
@@ -170,7 +183,12 @@ export async function renderPool(root: HTMLElement) {
           allItems.splice(0, allItems.length, ...(fresh.items as Item[]));
           renderList();
         } catch (err) {
-          alert((err as Error).message);
+          alert(claimErrorMessage((err as Error).message));
+          // The click landed on stale state (someone else got there first, or the count
+          // shrank) — pull the real state right now instead of leaving the same stale
+          // button up for another click to bounce off, or making the user wait for the
+          // next push/poll tick.
+          refreshIfChanged();
         }
       });
     });
