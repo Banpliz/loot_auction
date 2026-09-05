@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { AppDeps } from '../types';
 import { requireAdmin } from '../auth';
+import { publishChange } from '../pubsub';
 
 interface EventRow {
   id: number;
@@ -197,6 +198,7 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
 
       const deadlineAt = new Date(Date.now() + (durationMinutes as number) * 60_000).toISOString();
       deps.db.prepare("UPDATE events SET status = 'open', deadline_at = ? WHERE id = ?").run(deadlineAt, eventId);
+      publishChange();
       return { ok: true, deadlineAt };
     }
   );
@@ -224,6 +226,7 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
       const alreadyPast = !!event.deadline_at && new Date(event.deadline_at).getTime() < Date.now();
       const deadlineAt = alreadyPast ? (event.deadline_at as string) : new Date().toISOString();
       deps.db.prepare("UPDATE events SET status = 'resolved', deadline_at = ? WHERE id = ?").run(deadlineAt, eventId);
+      publishChange();
       return { ok: true };
     }
   );

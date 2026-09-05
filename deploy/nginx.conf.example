@@ -17,4 +17,18 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
     }
+
+    # /stream is a long-lived Server-Sent Events connection (see src/server/server.ts) —
+    # nginx's default response buffering would sit on every push until the buffer fills or
+    # the connection closes, defeating the whole point of a "push the instant it happens"
+    # channel. proxy_read_timeout also needs to exceed the server's heartbeat interval
+    # (20s, see SSE_HEARTBEAT_MS) or nginx will kill the connection as idle.
+    location /stream {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 1h;
+    }
 }

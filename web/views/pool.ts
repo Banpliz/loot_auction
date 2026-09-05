@@ -23,12 +23,14 @@ interface Item {
 
 let countdownTimer: ReturnType<typeof setInterval> | undefined;
 let pollTimer: ReturnType<typeof setInterval> | undefined;
+let eventSource: EventSource | undefined;
 
-// Someone else claiming a lot only ever showed up for a viewer after they manually
-// reloaded the page — confusing when several people are bidding on the same lots at once.
-// A short poll is plenty for an alliance-sized auction; a websocket/SSE push would be
-// real infrastructure for a problem this small.
-const POLL_INTERVAL_MS = 3000;
+// SSE (see src/server/pubsub.ts + the /stream route) pushes the moment anyone's claim
+// changes anything, so a viewer sees it essentially instantly instead of waiting out a
+// poll interval. The poll stays as a slow fallback for whenever the stream itself drops —
+// Telegram's in-app browser isn't always kind to long-lived connections — so a viewer
+// still catches up within a reasonable time even if the push never arrives.
+const POLL_FALLBACK_MS = 15000;
 
 const winnerLabel = (w: Winner) => escapeHtml(w.nickname ?? '—') + (w.quantity > 1 ? ` ×${w.quantity}` : '');
 
@@ -41,11 +43,17 @@ const renderWinners = (label: string, winners: Winner[]) => `
 export async function renderPool(root: HTMLElement) {
   if (countdownTimer) clearInterval(countdownTimer);
   if (pollTimer) clearInterval(pollTimer);
+  if (eventSource) eventSource.close();
   root.innerHTML = '<p class="spinner-text">Загрузка…</p>';
 
   const data = await apiFetch('/events/current');
   if (!data.event) {
     root.innerHTML = '<p class="empty-state">Пока нет активного ивента.</p>';
+    // No event yet doesn't mean none ever will be — an admin starting one should show up
+    // here right away rather than leaving the viewer stuck on this screen until they
+    // manually reopen the app.
+    eventSource = new EventSource('/stream');
+    eventSource.onmessage = () => renderPool(root);
     return;
   }
 
@@ -190,13 +198,13 @@ export async function renderPool(root: HTMLElement) {
   updateCountdown();
   countdownTimer = setInterval(updateCountdown, 1000);
 
-  pollTimer = setInterval(async () => {
+  async function refreshIfChanged() {
     if (document.hidden) return;
     let fresh;
     try {
       fresh = await apiFetch('/events/current');
     } catch {
-      return; // transient network hiccup — try again next tick, don't interrupt the user
+      return; // transient network hiccup — try again next time, don't interrupt the user
     }
     // The event itself changed (a new one started, this one was deleted, or its deadline
     // moved) — simplest correct thing is to reload the whole view rather than patch it.
@@ -209,5 +217,10 @@ export async function renderPool(root: HTMLElement) {
       allItems.splice(0, allItems.length, ...freshItems);
       renderList();
     }
-  }, POLL_INTERVAL_MS);
+  }
+
+  pollTimer = setInterval(refreshIfChanged, POLL_FALLBACK_MS);
+
+  eventSource = new EventSource('/stream');
+  eventSource.onmessage = refreshIfChanged;
 }

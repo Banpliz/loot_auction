@@ -8,6 +8,7 @@ import { computeIconSignature, isGenericChestIcon } from '../dedup';
 import { rememberLot } from '../lot-library';
 import { winLimitGroup } from './events';
 import { isTemplate } from '../layout-templates';
+import { publishChange } from '../pubsub';
 
 const VALID_COLORS = new Set(['blue', 'purple', 'red']);
 const VALID_CATEGORIES = new Set(['item', 'stone']);
@@ -88,7 +89,7 @@ function isPastDeadline(deps: AppDeps, eventId: number): boolean {
 // only in who's allowed to trigger it and under what guard. Returns whether a claim
 // actually existed to cancel.
 export function cancelClaim(deps: AppDeps, itemId: number, telegramId: number): boolean {
-  return deps.db.transaction(() => {
+  const cancelled = deps.db.transaction(() => {
     const claim = deps.db.prepare('SELECT quantity FROM claims WHERE item_id = ? AND telegram_id = ?').get(itemId, telegramId) as
       | { quantity: number }
       | undefined;
@@ -99,6 +100,8 @@ export function cancelClaim(deps: AppDeps, itemId: number, telegramId: number): 
     deps.db.prepare("UPDATE items SET quantity = quantity + ?, status = 'pool' WHERE id = ?").run(claim.quantity, itemId);
     return true;
   })();
+  if (cancelled) publishChange();
+  return cancelled;
 }
 
 function getUserGroupCounts(deps: AppDeps, eventId: number, userId: number): Map<string, number> {
@@ -232,6 +235,7 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
         )
         .run(eventId, screenshotId, MANUAL_PLACEHOLDER_IMAGE_PATH, color, (name ?? '').trim(), quantity);
 
+      publishChange();
       return { ok: true };
     }
   );
@@ -377,6 +381,7 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
         .run(remaining, remaining <= 0 ? 'auctioned' : 'pool', itemId);
     });
     claimUnits();
+    publishChange();
 
     return { ok: true };
   });
