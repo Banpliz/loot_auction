@@ -41,6 +41,7 @@ function migrate(db: Db) {
       telegram_id INTEGER PRIMARY KEY,
       username TEXT,
       game_nickname TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -123,5 +124,14 @@ function migrate(db: Db) {
   const claimColumns = db.prepare('PRAGMA table_info(claims)').all() as { name: string }[];
   if (!claimColumns.some((c) => c.name === 'quantity')) {
     db.exec(`ALTER TABLE claims ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1`);
+  }
+
+  // Additive column: gates access behind admin approval (pending/approved/banned).
+  // Existing rows predate this gate — defaulting to 'pending' deliberately resets every
+  // already-registered non-admin user, requiring them to be re-approved; the auth hook
+  // force-approves admins on their next request regardless of this default.
+  const userColumns = db.prepare('PRAGMA table_info(users)').all() as { name: string }[];
+  if (!userColumns.some((c) => c.name === 'status')) {
+    db.exec(`ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'`);
   }
 }

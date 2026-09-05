@@ -8,6 +8,7 @@ import { registerUserRoutes } from './routes/users';
 import { registerEventRoutes } from './routes/events';
 import { registerScreenshotRoutes } from './routes/screenshots';
 import { registerItemRoutes } from './routes/items';
+import { registerParticipantRoutes } from './routes/participants';
 
 export function buildServer(deps: AppDeps, webDistDir?: string) {
   // Default pino level is 'info', which logs every single request/response — drowns out
@@ -24,6 +25,7 @@ export function buildServer(deps: AppDeps, webDistDir?: string) {
       registerEventRoutes(api, deps);
       registerScreenshotRoutes(api, deps);
       registerItemRoutes(api, deps);
+      registerParticipantRoutes(api, deps);
     },
     { prefix: '/api' }
   );

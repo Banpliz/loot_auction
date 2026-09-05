@@ -16,7 +16,7 @@ describe('events routes', () => {
     app = buildServer({ db, botToken, adminTelegramIds: [1], dataDir: '/tmp/loot-auction-test' });
     adminInitData = signUserInitData(1, 'admin', botToken);
     memberInitData = signUserInitData(2, 'bob', botToken);
-    db.prepare("INSERT INTO users (telegram_id, username, game_nickname) VALUES (2, 'bob', 'Bob')").run();
+    db.prepare("INSERT INTO users (telegram_id, username, game_nickname, status) VALUES (2, 'bob', 'Bob', 'approved')").run();
   });
 
   it('POST /events is admin-only and creates a draft event with no deadline', async () => {

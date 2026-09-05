@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { openDb, type Db } from '../../../src/server/db';
 import { buildServer } from '../../../src/server/server';
-import { signUserInitData } from '../../test-helpers';
+import { signUserInitData, approveTestUser } from '../../test-helpers';
 import type { FastifyInstance } from 'fastify';
 
 describe('items routes', () => {
@@ -27,6 +27,8 @@ describe('items routes', () => {
 
     eventId = db.prepare("INSERT INTO events (title, status) VALUES ('Ивент', 'draft')").run().lastInsertRowid as number;
     db.prepare("INSERT INTO users (telegram_id, username) VALUES (1, 'admin')").run();
+    approveTestUser(db, 2);
+    approveTestUser(db, 3);
     const screenshotId = db
       .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
       .run(eventId, '/tmp/o.png').lastInsertRowid as number;
@@ -376,7 +378,6 @@ describe('items routes', () => {
     const lateItemId = db
       .prepare("INSERT INTO items (event_id, screenshot_id, name, image_path, status) VALUES (?, ?, 'Late', 'items/late2.png', 'pool')")
       .run(pastEventId, screenshotId).lastInsertRowid as number;
-    db.prepare("INSERT INTO users (telegram_id, username) VALUES (2, 'alice')").run();
     db.prepare('INSERT INTO claims (item_id, telegram_id) VALUES (?, 2)').run(lateItemId);
 
     const res = await app.inject({ method: 'DELETE', url: `/api/items/${lateItemId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });

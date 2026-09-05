@@ -29,3 +29,23 @@ export function renderProfilePrompt(root: HTMLElement, me: { gameNickname: strin
     }
   });
 }
+
+// Shown once a nickname is submitted but an admin hasn't approved (or has rejected) it —
+// see auth.ts's access gate and views/participants.ts for the admin side.
+export function renderPendingScreen(root: HTMLElement) {
+  root.innerHTML = `
+    <div class="empty-state">
+      <p>Заявка отправлена и ждёт одобрения администратора.</p>
+      <p style="color:var(--text-muted);font-size:0.85rem">Как только тебя одобрят, здесь появятся лоты.</p>
+    </div>
+  `;
+}
+
+export function renderBannedScreen(root: HTMLElement) {
+  root.innerHTML = `
+    <div class="empty-state">
+      <p>Доступ запрещён.</p>
+      <p style="color:var(--text-muted);font-size:0.85rem">Обратись к администратору альянса, если считаешь, что это ошибка.</p>
+    </div>
+  `;
+}
