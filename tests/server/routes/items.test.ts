@@ -863,10 +863,10 @@ describe('POST /events/:id/items/invasion-template', () => {
     expect(res.statusCode).toBe(200);
 
     const items = db.prepare('SELECT color, quantity, status, image_path as imagePath FROM items WHERE event_id = ?').all(eventId) as any[];
-    expect(items.length).toBe(14);
+    expect(items.length).toBe(15);
     expect(items.every((i) => i.quantity === 1 && i.status === 'pool')).toBe(true);
     expect(items.filter((i) => i.color === 'purple').length).toBe(10);
-    expect(items.filter((i) => i.color === 'blue').length).toBe(4);
+    expect(items.filter((i) => i.color === 'blue').length).toBe(5);
 
     // Every item's icon actually exists on disk under uploads.
     for (const item of items) {
@@ -882,6 +882,6 @@ describe('POST /events/:id/items/invasion-template', () => {
     await app.inject({ method: 'POST', url: `/api/events/${eventId}/items/invasion-template`, headers: { 'x-telegram-init-data': adminInitData } });
     await app.inject({ method: 'POST', url: `/api/events/${eventId}/items/invasion-template`, headers: { 'x-telegram-init-data': adminInitData } });
     const count = db.prepare("SELECT COUNT(*) as n FROM items WHERE event_id = ?").get(eventId) as any;
-    expect(count.n).toBe(28);
+    expect(count.n).toBe(30);
   });
 });

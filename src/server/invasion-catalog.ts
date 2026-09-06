@@ -19,6 +19,7 @@ export const INVASION_CATALOG: InvasionCatalogEntry[] = [
   { slug: 'white-bear-uniq', color: 'purple' },
   { slug: 'swirl-uniq', color: 'blue' },
   { slug: 'mask-uniq', color: 'blue' },
+  { slug: 'wolf-cat-uniq', color: 'blue' },
   { slug: 'chest-purple-1', color: 'purple' },
   { slug: 'chest-purple-2', color: 'purple' },
   { slug: 'chest-blue-1', color: 'blue' },
