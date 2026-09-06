@@ -9,6 +9,7 @@ import { rememberLot } from '../lot-library';
 import { winLimitGroup } from './events';
 import { isTemplate } from '../layout-templates';
 import { publishChange } from '../pubsub';
+import { INVASION_CATALOG } from '../invasion-catalog';
 
 const VALID_COLORS = new Set(['blue', 'purple', 'red']);
 const VALID_CATEGORIES = new Set(['item', 'stone']);
@@ -31,6 +32,26 @@ async function ensureManualPlaceholderImage(deps: AppDeps): Promise<void> {
   } catch {
     const png = await sharp(Buffer.from(MANUAL_PLACEHOLDER_SVG)).png().toBuffer();
     await fs.writeFile(filePath, png);
+  }
+}
+
+// Real, hand-curated icons for the invasion template (see invasion-catalog.ts) — bundled
+// in the repo under assets/, copied into this event's uploads dir the same lazy,
+// copy-once way the manual-lot placeholder is, so they're servable through the existing
+// /uploads/ static route without a route of their own.
+function invasionCatalogImagePath(slug: string): string {
+  return `items/invasion-catalog-${slug}.png`;
+}
+
+async function ensureInvasionCatalogImage(deps: AppDeps, slug: string): Promise<void> {
+  const itemsDir = path.join(deps.dataDir, 'uploads', 'items');
+  const destPath = path.join(itemsDir, `invasion-catalog-${slug}.png`);
+  await fs.mkdir(itemsDir, { recursive: true });
+  try {
+    await fs.access(destPath);
+  } catch {
+    const srcPath = path.join(process.cwd(), 'assets', 'invasion-catalog', `${slug}.png`);
+    await fs.copyFile(srcPath, destPath);
   }
 }
 
@@ -308,6 +329,36 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
         .run(eventId, screenshotId, MANUAL_PLACEHOLDER_IMAGE_PATH, color, (name ?? '').trim(), quantity);
 
       publishChange();
+      return { ok: true };
+    }
+  );
+
+  // One click seeds the whole known invasion reward catalog (see invasion-catalog.ts) into
+  // a draft event at quantity 1 each, real icons included — the admin then edits quantities
+  // (or removes what didn't drop) to match the real result instead of adding 14 manual lots
+  // by hand or screenshotting for CV recognition. Reuses the exact same manual-lot machinery
+  // (synthetic screenshot, template inference) — these end up as ordinary items.
+  app.post<{ Params: { id: string } }>(
+    '/events/:id/items/invasion-template',
+    { preHandler: requireAdmin(deps) },
+    async (request, reply) => {
+      const eventId = Number(request.params.id);
+      if (!isEventDraft(deps, eventId)) {
+        reply.code(409).send({ error: 'event is not in draft' });
+        return;
+      }
+
+      const userId = request.telegramUser!.telegramId;
+      const screenshotId = getOrCreateManualScreenshot(deps, eventId, userId, 'invasion');
+      const insertItem = deps.db.prepare(
+        "INSERT INTO items (event_id, screenshot_id, image_path, color, category, name, quantity, status) VALUES (?, ?, ?, ?, 'item', '', 1, 'pool')"
+      );
+
+      for (const entry of INVASION_CATALOG) {
+        await ensureInvasionCatalogImage(deps, entry.slug);
+        insertItem.run(eventId, screenshotId, invasionCatalogImagePath(entry.slug), entry.color);
+      }
+
       return { ok: true };
     }
   );

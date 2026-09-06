@@ -110,6 +110,7 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
           ? `
       <input id="lot-search" type="search" placeholder="Поиск лота по названию…" />
       <button id="manual-lot-toggle" type="button" class="btn-secondary btn-sm" style="margin:0.5rem 0">+ Добавить лот вручную</button>
+      <button id="invasion-template-btn" type="button" class="btn-secondary btn-sm" style="margin:0.5rem 0 0.5rem 0.5rem" title="Добавит все известные лоты «Вторжения» по 1 шт. — поправь количество под реальный дроп">Заполнить шаблоном «Вторжение»</button>
       <form id="manual-lot-form" style="display:none">
         <input id="manual-lot-name" placeholder="Пометка (не обязательно)" />
         <div class="field-row">
@@ -444,6 +445,17 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
         });
         manualForm.reset();
         manualForm.style.display = 'none';
+        await loadItems();
+      } catch (err) {
+        errorEl.textContent = (err as Error).message;
+      }
+    });
+
+    (root.querySelector('#invasion-template-btn') as HTMLButtonElement).addEventListener('click', async () => {
+      const errorEl = root.querySelector('#manual-lot-error') as HTMLElement;
+      errorEl.textContent = '';
+      try {
+        await apiFetch(`/events/${eventId}/items/invasion-template`, { method: 'POST' });
         await loadItems();
       } catch (err) {
         errorEl.textContent = (err as Error).message;

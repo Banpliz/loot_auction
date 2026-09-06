@@ -811,3 +811,77 @@ describe('POST /events/:id/items/manual', () => {
     expect(res.statusCode).toBe(400);
   });
 });
+
+describe('POST /events/:id/items/invasion-template', () => {
+  const botToken = 'test-token';
+  let db: Db;
+  let app: FastifyInstance;
+  let dataDir: string;
+  let adminInitData: string;
+  let aliceInitData: string;
+  let eventId: number;
+
+  beforeEach(async () => {
+    dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'invasion-template-test-'));
+    db = openDb(':memory:');
+    app = buildServer({ db, botToken, adminTelegramIds: [1], dataDir });
+    adminInitData = signUserInitData(1, 'admin', botToken);
+    aliceInitData = signUserInitData(2, 'alice', botToken);
+    db.prepare("INSERT INTO users (telegram_id, username) VALUES (1, 'admin')").run();
+    eventId = db.prepare("INSERT INTO events (title, status) VALUES ('Ивент', 'draft')").run().lastInsertRowid as number;
+  });
+
+  afterEach(async () => {
+    await fs.rm(dataDir, { recursive: true, force: true });
+  });
+
+  it('is admin-only', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/items/invasion-template`,
+      headers: { 'x-telegram-init-data': aliceInitData },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('is rejected once the event is no longer draft', async () => {
+    db.prepare("UPDATE events SET status = 'open' WHERE id = ?").run(eventId);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/items/invasion-template`,
+      headers: { 'x-telegram-init-data': adminInitData },
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('creates one item per catalog entry, quantity 1, on an invasion-templated screenshot', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/events/${eventId}/items/invasion-template`,
+      headers: { 'x-telegram-init-data': adminInitData },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const items = db.prepare('SELECT color, quantity, status, image_path as imagePath FROM items WHERE event_id = ?').all(eventId) as any[];
+    expect(items.length).toBe(14);
+    expect(items.every((i) => i.quantity === 1 && i.status === 'pool')).toBe(true);
+    expect(items.filter((i) => i.color === 'purple').length).toBe(10);
+    expect(items.filter((i) => i.color === 'blue').length).toBe(4);
+
+    // Every item's icon actually exists on disk under uploads.
+    for (const item of items) {
+      const stat = await fs.stat(path.join(dataDir, 'uploads', item.imagePath));
+      expect(stat.isFile()).toBe(true);
+    }
+
+    const screenshot = db.prepare('SELECT template FROM screenshots WHERE event_id = ?').get(eventId) as any;
+    expect(screenshot.template).toBe('invasion');
+  });
+
+  it('is idempotent-ish: calling it twice adds a second full set rather than erroring', async () => {
+    await app.inject({ method: 'POST', url: `/api/events/${eventId}/items/invasion-template`, headers: { 'x-telegram-init-data': adminInitData } });
+    await app.inject({ method: 'POST', url: `/api/events/${eventId}/items/invasion-template`, headers: { 'x-telegram-init-data': adminInitData } });
+    const count = db.prepare("SELECT COUNT(*) as n FROM items WHERE event_id = ?").get(eventId) as any;
+    expect(count.n).toBe(28);
+  });
+});

@@ -1,0 +1,72 @@
+[
+  {
+    "file": "s1r1_elemental-illusion_icon1.png",
+    "slug": "gorilla-blue",
+    "color": "blue"
+  },
+  {
+    "file": "s1r2_mat-gnezda-true_icon0.png",
+    "slug": "yellow-turtle",
+    "color": "purple"
+  },
+  {
+    "file": "s1r2_mat-gnezda-true_icon1.png",
+    "slug": "green-beast",
+    "color": "purple"
+  },
+  {
+    "file": "s1r2_mat-gnezda-true_icon2.png",
+    "slug": "orange-beast",
+    "color": "purple"
+  },
+  {
+    "file": "s1r2_mat-gnezda-true_icon3.png",
+    "slug": "teal-seal-uniq",
+    "color": "purple"
+  },
+  {
+    "file": "s1r2_mat-gnezda-true_icon4.png",
+    "slug": "brown-horse-uniq",
+    "color": "purple"
+  },
+  {
+    "file": "s1r4_dukh-dzhunglei-true_icon4.png",
+    "slug": "green-dragon-uniq",
+    "color": "purple"
+  },
+  {
+    "file": "s2r3_elemental-true_icon1.png",
+    "slug": "brown-horse-plain",
+    "color": "purple"
+  },
+  {
+    "file": "s2r3_elemental-true_icon3.png",
+    "slug": "white-bear-uniq",
+    "color": "purple"
+  },
+  {
+    "file": "s3r5_dukh-dzhunglei-illusion_icon3.png",
+    "slug": "swirl-uniq",
+    "color": "blue"
+  },
+  {
+    "file": "s3r5_dukh-dzhunglei-illusion_icon4.png",
+    "slug": "mask-uniq",
+    "color": "blue"
+  },
+  {
+    "file": "chest_purple.png",
+    "slug": "chest-purple-1",
+    "color": "purple"
+  },
+  {
+    "file": "chest_purple.png",
+    "slug": "chest-purple-2",
+    "color": "purple"
+  },
+  {
+    "file": "chest_blue.png",
+    "slug": "chest-blue-1",
+    "color": "blue"
+  }
+]
