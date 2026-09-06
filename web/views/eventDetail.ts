@@ -456,6 +456,12 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
       errorEl.textContent = '';
       try {
         await apiFetch(`/events/${eventId}/items/invasion-template`, { method: 'POST' });
+        // If the admin also uploads a screenshot afterward, the upload form should
+        // already be set to invasion instead of defaulting to feast — this event is
+        // clearly an invasion one now.
+        const templateSelect = root.querySelector('#template-select') as HTMLSelectElement;
+        templateSelect.value = 'invasion';
+        templateSelect.dispatchEvent(new Event('change'));
         await loadItems();
       } catch (err) {
         errorEl.textContent = (err as Error).message;
