@@ -133,11 +133,17 @@ export async function renderPool(root: HTMLElement) {
     return `<button data-action="claim" class="btn-sm">Ставка</button>`;
   };
 
-  // Once bidding closes, a lot nobody touched at all sinks to its own "Свободные" section
-  // below every occupied lot (see renderList) — those go on to be fought over in-game by
-  // the normal auction rules, so no claim UI belongs on them here at all (already true:
-  // the biddingClosed branch below never renders a button for a lot with no winners).
-  const isOccupied = (item: Item) => item.status === 'auctioned' || item.winners.length > 0;
+  // Once bidding closes, a lot that isn't fully spoken for sinks to its own "Свободные"
+  // section below every fully-occupied lot (see renderList) — whatever's left over goes
+  // on to be fought over in-game by the normal auction rules, same as a lot nobody
+  // touched at all. Invasion's own quantity is live decrementing stock (already 0, i.e.
+  // 'auctioned', exactly when it's fully claimed) — untouched. Feast's quantity is the
+  // lot's fixed total size (the draw never changes it), so "fully occupied" there means
+  // the draw actually handed out every unit, not just that *someone* won *something* —
+  // e.g. a lot of 2 with only 1 winner still has a unit nobody's getting through the app.
+  const totalWon = (item: Item) => item.winners.reduce((sum, w) => sum + w.quantity, 0);
+  const isOccupied = (item: Item) =>
+    item.status === 'auctioned' || (item.template !== 'invasion' && totalWon(item) >= item.quantity);
 
   const renderItem = (item: Item) => `
       <div class="lot-row" data-id="${item.id}" style="border-left: 4px solid ${item.status === 'auctioned' || (biddingClosed && isOccupied(item)) ? 'var(--text-muted)' : colorHex(item.color)}">
