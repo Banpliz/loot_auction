@@ -1,7 +1,7 @@
 // web/views/results.ts
 import { apiFetch } from '../api';
 import { escapeHtml } from '../escape-html';
-import { ITEM_COLORS, colorHex } from '../format';
+import { colorHex } from '../format';
 
 interface Won {
   name: string;
@@ -16,17 +16,15 @@ interface Participant {
   won: Won[];
 }
 
-// Most lots never get a name typed in by the admin (see HANDOFF.md) — falling back to
-// "без названия" for every single one of them just repeats the same useless word down
-// the whole list, so fall back to the color instead, at least telling entries apart.
-const wonLabel = (w: Won) => {
-  const label = escapeHtml(w.name) || ITEM_COLORS.find((c) => c.value === w.color)?.label || '?';
-  return `
+// Most lots never get a name typed in by the admin (see HANDOFF.md) — repeating the
+// rarity color as a text label next to every single icon was just as noisy as "без
+// названия" was (nearly every lot is the same color). The icon alone tells them apart;
+// only a real, admin-typed name is worth showing as text.
+const wonLabel = (w: Won) => `
     <span class="results-row__won-item">
-      <img src="/uploads/${w.imagePath}" alt="" />
-      <span style="color:${colorHex(w.color)}">${label}${w.quantity > 1 ? ` ×${w.quantity}` : ''}</span>
+      <img src="/uploads/${w.imagePath}" alt="" style="border-color:${colorHex(w.color)}" />
+      ${w.name ? `<span>${escapeHtml(w.name)}</span>` : ''}${w.quantity > 1 ? `<span>×${w.quantity}</span>` : ''}
     </span>`;
-};
 
 export async function renderResults(root: HTMLElement, eventId: number, onBack: () => void) {
   root.innerHTML = '<p class="spinner-text">Загрузка…</p>';

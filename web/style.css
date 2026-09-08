@@ -546,5 +546,6 @@ button {
   height: 16px;
   object-fit: cover;
   border-radius: 4px;
+  border: 1.5px solid;
   background: var(--bg);
 }
