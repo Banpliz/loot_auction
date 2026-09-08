@@ -502,37 +502,49 @@ button {
   padding: 1.5rem 0;
 }
 
-.results-row {
+.results-list {
   background: var(--surface);
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 0.7rem 0.85rem;
-  margin-bottom: 0.6rem;
+  overflow: hidden;
+}
+
+.results-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.4rem;
+  padding: 0.4rem 0.7rem;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  border-bottom: 1px solid var(--border);
+}
+
+.results-row:last-child {
+  border-bottom: none;
 }
 
 .results-row__name {
-  margin: 0 0 0.4rem;
   font-weight: 700;
+  flex-shrink: 0;
 }
 
 .results-row__won {
-  margin: 0;
   color: var(--text-muted);
+  overflow-wrap: anywhere;
 }
 
-.results-row__item {
-  display: flex;
+.results-row__won-item {
+  display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.25rem 0 0.25rem 0.5rem;
-  font-size: 0.85rem;
+  gap: 0.2rem;
+  vertical-align: middle;
 }
 
-.results-row__item img {
-  width: 32px;
-  height: 32px;
+.results-row__won-item img {
+  width: 16px;
+  height: 16px;
   object-fit: cover;
-  border-radius: var(--radius-sm);
+  border-radius: 4px;
   background: var(--bg);
-  flex-shrink: 0;
 }

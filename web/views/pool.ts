@@ -99,7 +99,7 @@ export async function renderPool(root: HTMLElement) {
   }
 
   root.innerHTML = `
-    ${data.event.status === 'resolved' ? '<button id="results-btn" class="btn-secondary btn-sm" style="margin-bottom:0.5rem">Итоги аукциона</button>' : ''}
+    ${data.event.status === 'resolved' ? '<button id="results-btn" class="btn btn-block" style="margin-bottom:0.75rem">Итоги аукциона</button>' : ''}
     <p id="deadline" class="countdown"></p>
     <div class="lots"></div>
   `;

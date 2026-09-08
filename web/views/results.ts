@@ -1,7 +1,7 @@
 // web/views/results.ts
 import { apiFetch } from '../api';
 import { escapeHtml } from '../escape-html';
-import { colorHex } from '../format';
+import { ITEM_COLORS, colorHex } from '../format';
 
 interface Won {
   name: string;
@@ -16,7 +16,17 @@ interface Participant {
   won: Won[];
 }
 
-const wonLabel = (w: Won) => escapeHtml(w.name) || '<span style="color:var(--text-muted)">без названия</span>';
+// Most lots never get a name typed in by the admin (see HANDOFF.md) — falling back to
+// "без названия" for every single one of them just repeats the same useless word down
+// the whole list, so fall back to the color instead, at least telling entries apart.
+const wonLabel = (w: Won) => {
+  const label = escapeHtml(w.name) || ITEM_COLORS.find((c) => c.value === w.color)?.label || '?';
+  return `
+    <span class="results-row__won-item">
+      <img src="/uploads/${w.imagePath}" alt="" />
+      <span style="color:${colorHex(w.color)}">${label}${w.quantity > 1 ? ` ×${w.quantity}` : ''}</span>
+    </span>`;
+};
 
 export async function renderResults(root: HTMLElement, eventId: number, onBack: () => void) {
   root.innerHTML = '<p class="spinner-text">Загрузка…</p>';
@@ -34,20 +44,8 @@ export async function renderResults(root: HTMLElement, eventId: number, onBack: 
                 .map(
                   (p) => `
                 <div class="results-row">
-                  <p class="results-row__name">${escapeHtml(p.nickname ?? '—')}</p>
-                  ${
-                    p.won.length === 0
-                      ? '<p class="results-row__won">—</p>'
-                      : p.won
-                          .map(
-                            (w) => `
-                        <div class="results-row__item" style="border-left: 3px solid ${colorHex(w.color)}">
-                          <img src="/uploads/${w.imagePath}" alt="" />
-                          <span>${wonLabel(w)}${w.quantity > 1 ? ` ×${w.quantity}` : ''}</span>
-                        </div>`
-                          )
-                          .join('')
-                  }
+                  <span class="results-row__name">${escapeHtml(p.nickname ?? '—')}</span>
+                  <span class="results-row__won">${p.won.length === 0 ? '—' : p.won.map(wonLabel).join(', ')}</span>
                 </div>`
                 )
                 .join('')}
