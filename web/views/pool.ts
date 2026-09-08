@@ -2,6 +2,7 @@
 import { apiFetch } from '../api';
 import { escapeHtml } from '../escape-html';
 import { colorHex } from '../format';
+import { renderResults } from './results';
 
 interface Winner {
   telegramId: number;
@@ -98,9 +99,20 @@ export async function renderPool(root: HTMLElement) {
   }
 
   root.innerHTML = `
+    ${data.event.status === 'resolved' ? '<button id="results-btn" class="btn-secondary btn-sm" style="margin-bottom:0.5rem">Итоги аукциона</button>' : ''}
     <p id="deadline" class="countdown"></p>
     <div class="lots"></div>
   `;
+
+  // Results only make sense once the draw has actually run (see POST /events/:id/finish)
+  // — showing this mid-bidding would either be empty (feast, nothing drawn yet) or a
+  // premature reveal (invasion, where claiming already means winning).
+  if (data.event.status === 'resolved') {
+    (root.querySelector('#results-btn') as HTMLButtonElement).addEventListener('click', () => {
+      stopPool();
+      renderResults(root, data.event.id, () => renderPool(root));
+    });
+  }
 
   const deadlineEl = root.querySelector('#deadline') as HTMLElement;
   const deadlineAt: Date | null = data.event.deadlineAt ? new Date(data.event.deadlineAt) : null;

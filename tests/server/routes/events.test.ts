@@ -608,4 +608,63 @@ describe('events routes', () => {
       expect(db.prepare('SELECT COUNT(*) as n FROM item_winners WHERE item_id = ?').get(itemId)).toMatchObject({ n: 0 });
     });
   });
+
+  describe('GET /events/:id/results', () => {
+    it('returns 404 for a nonexistent event', async () => {
+      const res = await app.inject({ method: 'GET', url: '/api/events/999999/results', headers: { 'x-telegram-init-data': memberInitData } });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it('lists everyone who entered, alphabetically, with an empty won list for a feast lot nobody drew', async () => {
+      db.prepare("INSERT INTO users (telegram_id, username) VALUES (1, 'admin')").run();
+      const carolInitData = signUserInitData(3, 'carol', botToken);
+      approveTestUser(db, 3);
+      db.prepare("UPDATE users SET game_nickname = 'Carol' WHERE telegram_id = 3").run();
+      const eventId = db.prepare("INSERT INTO events (title, status) VALUES ('Пир', 'open')").run().lastInsertRowid as number;
+      const screenshotId = db
+        .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
+        .run(eventId, '/tmp/o.png').lastInsertRowid as number;
+      const itemId = db
+        .prepare("INSERT INTO items (event_id, screenshot_id, name, image_path, status) VALUES (?, ?, 'Меч', 'items/a.png', 'pool')")
+        .run(eventId, screenshotId).lastInsertRowid as number;
+
+      await app.inject({ method: 'POST', url: `/api/items/${itemId}/claim`, headers: { 'x-telegram-init-data': memberInitData } });
+      await app.inject({ method: 'POST', url: `/api/items/${itemId}/claim`, headers: { 'x-telegram-init-data': carolInitData } });
+      await app.inject({ method: 'POST', url: `/api/events/${eventId}/finish`, headers: { 'x-telegram-init-data': adminInitData } });
+
+      const res = await app.inject({ method: 'GET', url: `/api/events/${eventId}/results`, headers: { 'x-telegram-init-data': memberInitData } });
+      expect(res.statusCode).toBe(200);
+      const results = res.json().results as { nickname: string | null; won: { name: string }[] }[];
+      expect(results.map((r) => r.nickname)).toEqual(['Bob', 'Carol']);
+
+      const winner = results.find((r) => r.won.length > 0)!;
+      const loser = results.find((r) => r.won.length === 0)!;
+      expect(winner.won).toEqual([{ name: 'Меч', color: 'blue', imagePath: 'items/a.png', quantity: 1 }]);
+      expect(loser.won).toEqual([]);
+    });
+
+    it("shows an invasion claim as already won — claiming there is winning, there's no separate draw", async () => {
+      db.prepare("INSERT INTO users (telegram_id, username) VALUES (1, 'admin')").run();
+      const eventId = db.prepare("INSERT INTO events (title, status) VALUES ('Вторжение', 'open')").run().lastInsertRowid as number;
+      const screenshotId = db
+        .prepare("INSERT INTO screenshots (event_id, original_path, rows, template, uploaded_by) VALUES (?, ?, 1, 'invasion', 1)")
+        .run(eventId, '/tmp/inv.png').lastInsertRowid as number;
+      const itemId = db
+        .prepare(
+          "INSERT INTO items (event_id, screenshot_id, name, image_path, status, color, quantity) VALUES (?, ?, 'Blue', 'items/x.png', 'pool', 'blue', 2)"
+        )
+        .run(eventId, screenshotId).lastInsertRowid as number;
+
+      await app.inject({
+        method: 'POST',
+        url: `/api/items/${itemId}/claim`,
+        headers: { 'x-telegram-init-data': memberInitData, 'content-type': 'application/json' },
+        payload: { quantity: 2 },
+      });
+
+      const res = await app.inject({ method: 'GET', url: `/api/events/${eventId}/results`, headers: { 'x-telegram-init-data': memberInitData } });
+      const results = res.json().results as { nickname: string | null; won: { name: string; quantity: number }[] }[];
+      expect(results).toEqual([{ telegramId: 2, nickname: 'Bob', won: [{ name: 'Blue', color: 'blue', imagePath: 'items/x.png', quantity: 2 }] }]);
+    });
+  });
 });

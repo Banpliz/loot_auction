@@ -501,3 +501,38 @@ button {
   text-align: center;
   padding: 1.5rem 0;
 }
+
+.results-row {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.7rem 0.85rem;
+  margin-bottom: 0.6rem;
+}
+
+.results-row__name {
+  margin: 0 0 0.4rem;
+  font-weight: 700;
+}
+
+.results-row__won {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.results-row__item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0 0.25rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+.results-row__item img {
+  width: 32px;
+  height: 32px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  flex-shrink: 0;
+}

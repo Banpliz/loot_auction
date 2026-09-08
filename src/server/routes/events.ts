@@ -249,6 +249,75 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
     };
   });
 
+  // Per-person view of the same data attachWinners already exposes per-item — everyone
+  // who entered this event at all (whether or not they ended up winning anything),
+  // alphabetically by nickname, with whatever they won attached. Invasion claims are wins
+  // by construction (see attachWinners); feast claims are just entries, so a person shows
+  // up here with an empty `won` list until the draw in POST /events/:id/finish actually
+  // hands them something.
+  app.get<{ Params: { id: string } }>('/events/:id/results', async (request, reply) => {
+    const eventId = Number(request.params.id);
+    const event = deps.db.prepare('SELECT id FROM events WHERE id = ?').get(eventId);
+    if (!event) {
+      reply.code(404).send({ error: 'event not found' });
+      return;
+    }
+
+    const participants = deps.db
+      .prepare(
+        `SELECT DISTINCT u.telegram_id as telegramId, u.game_nickname as nickname
+         FROM claims c
+         JOIN items i ON i.id = c.item_id
+         JOIN users u ON u.telegram_id = c.telegram_id
+         WHERE i.event_id = ?`
+      )
+      .all(eventId) as { telegramId: number; nickname: string | null }[];
+
+    const invasionWon = deps.db
+      .prepare(
+        `SELECT c.telegram_id as telegramId, i.name as name, i.color as color, i.image_path as imagePath, c.quantity as quantity
+         FROM claims c
+         JOIN items i ON i.id = c.item_id
+         JOIN screenshots s ON s.id = i.screenshot_id
+         WHERE i.event_id = ? AND s.template = 'invasion'`
+      )
+      .all(eventId) as { telegramId: number; name: string; color: string; imagePath: string; quantity: number }[];
+
+    const feastWon = deps.db
+      .prepare(
+        `SELECT w.telegram_id as telegramId, i.name as name, i.color as color, i.image_path as imagePath
+         FROM item_winners w
+         JOIN items i ON i.id = w.item_id
+         JOIN screenshots s ON s.id = i.screenshot_id
+         WHERE i.event_id = ? AND s.template != 'invasion'`
+      )
+      .all(eventId) as { telegramId: number; name: string; color: string; imagePath: string }[];
+
+    interface Won {
+      name: string;
+      color: string;
+      imagePath: string;
+      quantity: number;
+    }
+    const wonByPerson = new Map<number, Won[]>();
+    for (const row of invasionWon) {
+      const list = wonByPerson.get(row.telegramId) ?? [];
+      list.push({ name: row.name, color: row.color, imagePath: row.imagePath, quantity: row.quantity });
+      wonByPerson.set(row.telegramId, list);
+    }
+    for (const row of feastWon) {
+      const list = wonByPerson.get(row.telegramId) ?? [];
+      list.push({ name: row.name, color: row.color, imagePath: row.imagePath, quantity: 1 });
+      wonByPerson.set(row.telegramId, list);
+    }
+
+    const results = participants
+      .map((p) => ({ telegramId: p.telegramId, nickname: p.nickname, won: wonByPerson.get(p.telegramId) ?? [] }))
+      .sort((a, b) => (a.nickname ?? '').localeCompare(b.nickname ?? '', 'ru'));
+
+    return { results };
+  });
+
   app.post<{ Params: { id: string }; Body: { durationMinutes?: number } }>(
     '/events/:id/start',
     { preHandler: requireAdmin(deps) },
