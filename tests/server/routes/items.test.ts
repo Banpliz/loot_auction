@@ -108,21 +108,36 @@ describe('items routes', () => {
     expect(row.status).toBe('removed');
   });
 
-  it('claiming reserves the lot immediately: quantity drops and status flips to auctioned at zero', async () => {
+  it('claiming a feast lot just registers an entry: quantity and status are untouched', async () => {
     db.prepare("UPDATE events SET status = 'open' WHERE id = ?").run(eventId);
     db.prepare('UPDATE items SET quantity = 2 WHERE id = ?').run(itemAId);
 
     const first = await app.inject({ method: 'POST', url: `/api/items/${itemAId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
     expect(first.statusCode).toBe(200);
-    let row = db.prepare('SELECT quantity, status FROM items WHERE id = ?').get(itemAId) as any;
-    expect(row.quantity).toBe(1);
-    expect(row.status).toBe('pool');
-
     const second = await app.inject({ method: 'POST', url: `/api/items/${itemAId}/claim`, headers: { 'x-telegram-init-data': bobInitData } });
     expect(second.statusCode).toBe(200);
-    row = db.prepare('SELECT quantity, status FROM items WHERE id = ?').get(itemAId) as any;
-    expect(row.quantity).toBe(0);
-    expect(row.status).toBe('auctioned');
+
+    const row = db.prepare('SELECT quantity, status FROM items WHERE id = ?').get(itemAId) as any;
+    expect(row.quantity).toBe(2);
+    expect(row.status).toBe('pool');
+    const claimCount = db.prepare('SELECT COUNT(*) as n FROM claims WHERE item_id = ?').get(itemAId) as any;
+    expect(claimCount.n).toBe(2);
+  });
+
+  it('a feast claim always registers exactly one unit of interest, regardless of requested quantity', async () => {
+    db.prepare("UPDATE events SET status = 'open' WHERE id = ?").run(eventId);
+    db.prepare("UPDATE items SET quantity = 3, category = 'stone' WHERE id = ?").run(itemAId);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/items/${itemAId}/claim`,
+      headers: { 'x-telegram-init-data': aliceInitData, 'content-type': 'application/json' },
+      payload: { quantity: 2 },
+    });
+    expect(res.statusCode).toBe(200);
+    const claim = db.prepare('SELECT quantity FROM claims WHERE item_id = ? AND telegram_id = 2').get(itemAId) as any;
+    expect(claim.quantity).toBe(1);
+    const item = db.prepare('SELECT quantity FROM items WHERE id = ?').get(itemAId) as any;
+    expect(item.quantity).toBe(3); // untouched — feast no longer reserves stock at claim time
   });
 
   it('claiming a sold-out lot is rejected', async () => {
@@ -193,26 +208,15 @@ describe('items routes', () => {
     expect(second.statusCode).toBe(200);
   });
 
-  it('claiming a second lot in the same win-limit group is rejected once the cap is hit', async () => {
+  it('a feast claim can enter several lots in the same category — the win-limit only bites at the draw, not at claim time', async () => {
     db.prepare("UPDATE events SET status = 'open' WHERE id = ?").run(eventId);
-    // itemA and itemB are both feast/category 'item' by default — capped at 1.
+    // itemA and itemB are both feast/category 'item' by default — capped at 1 win, but
+    // that cap is enforced by the draw in POST /events/:id/finish (see events.test.ts),
+    // not here — a raffle entry isn't a win yet.
     const first = await app.inject({ method: 'POST', url: `/api/items/${itemAId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
     expect(first.statusCode).toBe(200);
     const second = await app.inject({ method: 'POST', url: `/api/items/${itemBId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
-    expect(second.statusCode).toBe(409);
-    const row = db.prepare('SELECT quantity FROM items WHERE id = ?').get(itemBId) as any;
-    expect(row.quantity).toBe(1); // unclaimed — the rejected attempt never decremented it
-  });
-
-  it('feast categories stay mutually exclusive at claim time: winning a stone blocks winning gear too', async () => {
-    db.prepare("UPDATE events SET status = 'open' WHERE id = ?").run(eventId);
-    db.prepare("UPDATE items SET category = 'stone' WHERE id = ?").run(itemAId);
-    db.prepare("UPDATE items SET category = 'item' WHERE id = ?").run(itemBId);
-
-    const first = await app.inject({ method: 'POST', url: `/api/items/${itemAId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
-    expect(first.statusCode).toBe(200);
-    const second = await app.inject({ method: 'POST', url: `/api/items/${itemBId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
-    expect(second.statusCode).toBe(409);
+    expect(second.statusCode).toBe(200);
   });
 
   it('respects per-color win limits for invasion at claim time (red 1/event, blue 2/event, independent of each other)', async () => {
@@ -342,16 +346,14 @@ describe('items routes', () => {
     });
   });
 
-  it('unclaiming gives the unit back: quantity increments and status returns to pool', async () => {
+  it('unclaiming a feast entry just removes it: quantity and status are untouched', async () => {
     db.prepare("UPDATE events SET status = 'open' WHERE id = ?").run(eventId);
     db.prepare('UPDATE items SET quantity = 1 WHERE id = ?').run(itemAId);
     await app.inject({ method: 'POST', url: `/api/items/${itemAId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
-    let row = db.prepare('SELECT quantity, status FROM items WHERE id = ?').get(itemAId) as any;
-    expect(row.status).toBe('auctioned');
 
     const res = await app.inject({ method: 'DELETE', url: `/api/items/${itemAId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
     expect(res.statusCode).toBe(200);
-    row = db.prepare('SELECT quantity, status FROM items WHERE id = ?').get(itemAId) as any;
+    const row = db.prepare('SELECT quantity, status FROM items WHERE id = ?').get(itemAId) as any;
     expect(row.quantity).toBe(1);
     expect(row.status).toBe('pool');
     const claimRow = db.prepare('SELECT COUNT(*) as count FROM claims WHERE item_id = ? AND telegram_id = 2').get(itemAId) as any;
@@ -369,7 +371,7 @@ describe('items routes', () => {
     expect(res.statusCode).toBe(403);
   });
 
-  it('admin can kick a specific person off a lot, returning their units without touching other claimants', async () => {
+  it('admin can kick a specific person off a lot, removing only their entry', async () => {
     db.prepare("UPDATE events SET status = 'open' WHERE id = ?").run(eventId);
     db.prepare('UPDATE items SET quantity = 2 WHERE id = ?').run(itemAId);
     await app.inject({ method: 'POST', url: `/api/items/${itemAId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
@@ -383,7 +385,7 @@ describe('items routes', () => {
     expect(res.statusCode).toBe(200);
 
     const item = db.prepare('SELECT quantity, status FROM items WHERE id = ?').get(itemAId) as any;
-    expect(item.quantity).toBe(1);
+    expect(item.quantity).toBe(2); // untouched — feast entries never reserved stock
     expect(item.status).toBe('pool');
 
     const aliceClaim = db.prepare('SELECT COUNT(*) as count FROM claims WHERE item_id = ? AND telegram_id = 2').get(itemAId) as any;
@@ -434,36 +436,26 @@ describe('items routes', () => {
     expect(row.quantity).toBe(1); // unchanged
   });
 
-  it('claiming with quantity 2 reserves two units in a single claim', async () => {
-    db.prepare("UPDATE events SET status = 'open' WHERE id = ?").run(eventId);
-    // itemA defaults to feast/category 'item' (win-limit cap 1) — bump it to 'stone'
-    // (cap 3) so this test is purely about the multi-unit claim, not the win limit.
-    db.prepare("UPDATE items SET quantity = 3, category = 'stone' WHERE id = ?").run(itemAId);
+  it('claiming more units than remain is rejected for invasion (stock still real there)', async () => {
+    const invasionEventId = db
+      .prepare("INSERT INTO events (title, status) VALUES ('Вторжение', 'open')")
+      .run().lastInsertRowid as number;
+    const screenshotId = db
+      .prepare("INSERT INTO screenshots (event_id, original_path, rows, template, uploaded_by) VALUES (?, ?, 1, 'invasion', 1)")
+      .run(invasionEventId, '/tmp/inv-stock.png').lastInsertRowid as number;
+    const blueId = db
+      .prepare(
+        "INSERT INTO items (event_id, screenshot_id, name, image_path, status, color, quantity) VALUES (?, ?, 'Blue', 'items/x.png', 'pool', 'blue', 1)"
+      )
+      .run(invasionEventId, screenshotId).lastInsertRowid as number;
     const res = await app.inject({
       method: 'POST',
-      url: `/api/items/${itemAId}/claim`,
-      headers: { 'x-telegram-init-data': aliceInitData, 'content-type': 'application/json' },
-      payload: { quantity: 2 },
-    });
-    expect(res.statusCode).toBe(200);
-    const item = db.prepare('SELECT quantity, status FROM items WHERE id = ?').get(itemAId) as any;
-    expect(item.quantity).toBe(1);
-    expect(item.status).toBe('pool');
-    const claim = db.prepare('SELECT quantity FROM claims WHERE item_id = ? AND telegram_id = 2').get(itemAId) as any;
-    expect(claim.quantity).toBe(2);
-  });
-
-  it('claiming more units than remain is rejected', async () => {
-    db.prepare("UPDATE events SET status = 'open' WHERE id = ?").run(eventId);
-    db.prepare('UPDATE items SET quantity = 1 WHERE id = ?').run(itemAId);
-    const res = await app.inject({
-      method: 'POST',
-      url: `/api/items/${itemAId}/claim`,
+      url: `/api/items/${blueId}/claim`,
       headers: { 'x-telegram-init-data': aliceInitData, 'content-type': 'application/json' },
       payload: { quantity: 2 },
     });
     expect(res.statusCode).toBe(409);
-    const item = db.prepare('SELECT quantity FROM items WHERE id = ?').get(itemAId) as any;
+    const item = db.prepare('SELECT quantity FROM items WHERE id = ?').get(blueId) as any;
     expect(item.quantity).toBe(1); // unchanged
   });
 
@@ -518,20 +510,30 @@ describe('items routes', () => {
     expect(res.statusCode).toBe(409);
   });
 
-  it('unclaiming gives back the exact quantity that claim reserved', async () => {
-    db.prepare("UPDATE events SET status = 'open' WHERE id = ?").run(eventId);
-    db.prepare("UPDATE items SET quantity = 3, category = 'stone' WHERE id = ?").run(itemAId);
+  it('unclaiming an invasion lot gives back the exact quantity that claim reserved', async () => {
+    const invasionEventId = db
+      .prepare("INSERT INTO events (title, status) VALUES ('Вторжение', 'open')")
+      .run().lastInsertRowid as number;
+    const screenshotId = db
+      .prepare("INSERT INTO screenshots (event_id, original_path, rows, template, uploaded_by) VALUES (?, ?, 1, 'invasion', 1)")
+      .run(invasionEventId, '/tmp/inv-unclaim.png').lastInsertRowid as number;
+    const blueId = db
+      .prepare(
+        "INSERT INTO items (event_id, screenshot_id, name, image_path, status, color, quantity) VALUES (?, ?, 'Blue', 'items/x.png', 'pool', 'blue', 3)"
+      )
+      .run(invasionEventId, screenshotId).lastInsertRowid as number;
+
     const claimRes = await app.inject({
       method: 'POST',
-      url: `/api/items/${itemAId}/claim`,
+      url: `/api/items/${blueId}/claim`,
       headers: { 'x-telegram-init-data': aliceInitData, 'content-type': 'application/json' },
       payload: { quantity: 2 },
     });
     expect(claimRes.statusCode).toBe(200);
 
-    const res = await app.inject({ method: 'DELETE', url: `/api/items/${itemAId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
+    const res = await app.inject({ method: 'DELETE', url: `/api/items/${blueId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
     expect(res.statusCode).toBe(200);
-    const item = db.prepare('SELECT quantity, status FROM items WHERE id = ?').get(itemAId) as any;
+    const item = db.prepare('SELECT quantity, status FROM items WHERE id = ?').get(blueId) as any;
     expect(item.quantity).toBe(3);
     expect(item.status).toBe('pool');
   });

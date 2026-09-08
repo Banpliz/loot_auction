@@ -82,10 +82,13 @@ describe('participants routes', () => {
 
   it('POST /participants/:id/ban bans the user and cancels their active claims in open events', async () => {
     db.prepare("UPDATE users SET status = 'approved' WHERE telegram_id = 2").run();
-    const eventId = db.prepare("INSERT INTO events (title, status) VALUES ('Ивент', 'open')").run().lastInsertRowid as number;
+    const eventId = db.prepare("INSERT INTO events (title, status) VALUES ('Вторжение', 'open')").run().lastInsertRowid as number;
     const screenshotId = db
-      .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
+      .prepare("INSERT INTO screenshots (event_id, original_path, rows, template, uploaded_by) VALUES (?, ?, 1, 'invasion', 1)")
       .run(eventId, '/tmp/o.png').lastInsertRowid as number;
+    // Invasion still reserves stock instantly on claim (see items.ts), so this simulates
+    // that reserved state directly — quantity 0, status auctioned — the way a real
+    // instant-claim would have left it.
     const itemId = db
       .prepare("INSERT INTO items (event_id, screenshot_id, name, image_path, status, quantity) VALUES (?, ?, 'X', 'items/x.png', 'auctioned', 0)")
       .run(eventId, screenshotId).lastInsertRowid as number;

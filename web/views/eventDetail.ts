@@ -74,25 +74,21 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
       <p style="color:var(--text-muted);font-size:0.85rem">
         Можно выбрать сразу несколько скриншотов — все они должны показывать одинаковое
         количество строк. Приложение порежет их на лоты, определит цвет редкости и само
-        объединит одинаковые на вид предметы в один лот с количеством («Кол-во»). Ставка
-        бронирует один экземпляр лота сразу — кто раньше нажал, тому и досталось; когда
-        «Кол-во» дойдёт до нуля, лот станет серым и недоступным для ставок. Проверь
-        получившееся кол-во и поправь, если распозналось не то. Название не распознаётся
-        автоматически — впиши вручную только если по иконке не понятно, что за лот
-        (например, у сундуков одного вида, но разного уровня — учти, что такие лоты тоже
-        объединятся в один, раз иконка совпадает, так что кол-во и пометку для них стоит
-        проверить особенно внимательно). Для вторжения грузи скриншот экрана «Трофеи»
-        (не старый экран аукциона) — строки указывать не нужно, модель сама разберёт
-        скриншот. Цену не показываем — участники и так видят её в
-        игре. Редактировать лоты можно, пока не нажата «Начать аукцион» — после старта
-        список блокируется.
+        объединит одинаковые на вид предметы в один лот с количеством («Кол-во»). Ставка —
+        это заявка на участие; когда приём заявок закончится и аукцион завершится, лоты
+        разыграются случайно среди подавших заявку. Проверь получившееся кол-во и поправь,
+        если распозналось не то. Название не распознаётся автоматически — впиши вручную
+        только если по иконке не понятно, что за лот (например, у сундуков одного вида, но
+        разного уровня — учти, что такие лоты тоже объединятся в один, раз иконка совпадает,
+        так что кол-во и пометку для них стоит проверить особенно внимательно). Цену не
+        показываем — участники и так видят её в игре. Редактировать лоты можно, пока не
+        нажата «Начать аукцион» — после старта список блокируется.
       </p>
       <form id="screenshot-form">
         <div class="field-row">
           <input id="rows-input" name="rows" type="number" min="1" max="50" placeholder="Строк на каждом скрине" required />
           <select id="template-select" name="template" required>
             <option value="feast">Пир победы</option>
-            <option value="invasion">Вторжение (скрин «Трофеи»)</option>
           </select>
         </div>
         <input name="file" type="file" accept="image/*" multiple required />
@@ -110,17 +106,12 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
           ? `
       <input id="lot-search" type="search" placeholder="Поиск лота по названию…" />
       <button id="manual-lot-toggle" type="button" class="btn-secondary btn-sm" style="margin:0.5rem 0">+ Добавить лот вручную</button>
-      <button id="invasion-template-btn" type="button" class="btn-secondary btn-sm" style="margin:0.5rem 0 0.5rem 0.5rem" title="Добавит все известные лоты «Вторжения» по 1 шт. — поправь количество под реальный дроп">Заполнить шаблоном «Вторжение»</button>
       <form id="manual-lot-form" style="display:none">
         <input id="manual-lot-name" placeholder="Пометка (не обязательно)" />
         <div class="field-row">
           <input id="manual-lot-quantity" type="number" min="1" value="1" placeholder="Кол-во" required />
           <select id="manual-lot-color">
             ${ITEM_COLORS.map((c) => `<option value="${c.value}">${c.label}</option>`).join('')}
-          </select>
-          <select id="manual-lot-template" title="Определяет правило лимита побед: «Пир» — по категории, «Вторжение» — по цвету (синий даёт до 2 шт за раз)">
-            <option value="feast">Пир победы</option>
-            <option value="invasion">Вторжение</option>
           </select>
         </div>
         <button type="submit" class="btn-block btn-sm">Добавить</button>
@@ -436,32 +427,14 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
       const name = (root.querySelector('#manual-lot-name') as HTMLInputElement).value;
       const quantity = Number((root.querySelector('#manual-lot-quantity') as HTMLInputElement).value);
       const color = (root.querySelector('#manual-lot-color') as HTMLSelectElement).value;
-      const template = (root.querySelector('#manual-lot-template') as HTMLSelectElement).value;
       try {
         await apiFetch(`/events/${eventId}/items/manual`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ name, quantity, color, template }),
+          body: JSON.stringify({ name, quantity, color }),
         });
         manualForm.reset();
         manualForm.style.display = 'none';
-        await loadItems();
-      } catch (err) {
-        errorEl.textContent = (err as Error).message;
-      }
-    });
-
-    (root.querySelector('#invasion-template-btn') as HTMLButtonElement).addEventListener('click', async () => {
-      const errorEl = root.querySelector('#manual-lot-error') as HTMLElement;
-      errorEl.textContent = '';
-      try {
-        await apiFetch(`/events/${eventId}/items/invasion-template`, { method: 'POST' });
-        // If the admin also uploads a screenshot afterward, the upload form should
-        // already be set to invasion instead of defaulting to feast — this event is
-        // clearly an invasion one now.
-        const templateSelect = root.querySelector('#template-select') as HTMLSelectElement;
-        templateSelect.value = 'invasion';
-        templateSelect.dispatchEvent(new Event('change'));
         await loadItems();
       } catch (err) {
         errorEl.textContent = (err as Error).message;

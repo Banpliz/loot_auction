@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { AppDeps } from '../types';
 import { requireAdmin } from '../auth';
 import { publishChange } from '../pubsub';
+import { shuffle } from '../random';
 
 interface EventRow {
   id: number;
@@ -61,29 +62,89 @@ interface Winner {
   quantity: number;
 }
 
-// Attaches a `winners` array to each item — one entry per person currently holding a
-// unit of it. Reads `claims` directly (not the old `item_winners` draw ledger): under
-// first-come-first-served reservation, "claimed a unit" and "has a unit" are the same
-// thing by construction, so there's nothing left for a separate winners table to record.
+// Attaches a `winners` array to each item. Invasion still reserves instantly on claim
+// (see items.ts), so "claimed a unit" and "has a unit" are the same thing there — read
+// straight from `claims`. Feast went back to a raffle: a claim there is just an entry,
+// and the actual winners are whoever the draw in POST /events/:id/finish wrote to
+// `item_winners` (always exactly one unit each, per that table's UNIQUE(item_id,
+// telegram_id) — a raffle never hands one person two units of the same lot).
 function attachWinners<T extends { id: number }>(deps: AppDeps, items: T[]): (T & { winners: Winner[] })[] {
   if (items.length === 0) return [];
   const placeholders = items.map(() => '?').join(',');
-  const rows = deps.db
+  const ids = items.map((i) => i.id);
+
+  const invasionRows = deps.db
     .prepare(
       `SELECT c.item_id as itemId, u.telegram_id as telegramId, u.game_nickname as nickname, c.quantity as quantity
        FROM claims c
+       JOIN items i ON i.id = c.item_id
+       JOIN screenshots s ON s.id = i.screenshot_id
        LEFT JOIN users u ON u.telegram_id = c.telegram_id
-       WHERE c.item_id IN (${placeholders})`
+       WHERE c.item_id IN (${placeholders}) AND s.template = 'invasion'`
     )
-    .all(...items.map((i) => i.id)) as { itemId: number; telegramId: number; nickname: string | null; quantity: number }[];
+    .all(...ids) as { itemId: number; telegramId: number; nickname: string | null; quantity: number }[];
+
+  const drawnRows = deps.db
+    .prepare(
+      `SELECT w.item_id as itemId, u.telegram_id as telegramId, u.game_nickname as nickname
+       FROM item_winners w
+       JOIN items i ON i.id = w.item_id
+       JOIN screenshots s ON s.id = i.screenshot_id
+       LEFT JOIN users u ON u.telegram_id = w.telegram_id
+       WHERE w.item_id IN (${placeholders}) AND s.template != 'invasion'`
+    )
+    .all(...ids) as { itemId: number; telegramId: number; nickname: string | null }[];
 
   const winnersByItem = new Map<number, Winner[]>();
-  for (const row of rows) {
+  for (const row of invasionRows) {
     const list = winnersByItem.get(row.itemId) ?? [];
     list.push({ telegramId: row.telegramId, nickname: row.nickname, quantity: row.quantity });
     winnersByItem.set(row.itemId, list);
   }
+  for (const row of drawnRows) {
+    const list = winnersByItem.get(row.itemId) ?? [];
+    list.push({ telegramId: row.telegramId, nickname: row.nickname, quantity: 1 });
+    winnersByItem.set(row.itemId, list);
+  }
   return items.map((item) => ({ ...item, winners: winnersByItem.get(item.id) ?? [] }));
+}
+
+// The random draw a feast lot gets at POST /events/:id/finish (see below). Shuffles both
+// the order lots are resolved in and their claimants, then hands out exactly `quantity`
+// distinct winners per lot — respecting the item/stone category cap and mutual exclusion
+// (see winLimitGroup) — same spirit as the pre-FCFS raffle this restores, generalized to
+// lots with more than one unit. Invasion lots are never in this list: they're excluded by
+// the 'pool' + non-invasion filter in the caller, since invasion still resolves instantly
+// on claim and has nothing left to draw for.
+function drawWinners(deps: AppDeps, eventId: number): void {
+  const poolItems = deps.db
+    .prepare(
+      `SELECT i.id, i.color, i.category, i.quantity, s.template
+       FROM items i JOIN screenshots s ON s.id = i.screenshot_id
+       WHERE i.event_id = ? AND i.status = 'pool' AND s.template != 'invasion'`
+    )
+    .all(eventId) as { id: number; color: string; category: string; quantity: number; template: string }[];
+
+  const groupCounts = new Map<number, Map<string, number>>();
+  const insertWinner = deps.db.prepare('INSERT INTO item_winners (item_id, telegram_id) VALUES (?, ?)');
+
+  for (const item of shuffle(poolItems)) {
+    const claimants = deps.db.prepare('SELECT telegram_id FROM claims WHERE item_id = ?').all(item.id) as { telegram_id: number }[];
+    const { key, limit, exclusiveWith } = winLimitGroup(item.template, item.color, item.category);
+
+    let remaining = item.quantity;
+    for (const claimant of shuffle(claimants)) {
+      if (remaining <= 0) break;
+      const counts = groupCounts.get(claimant.telegram_id) ?? new Map<string, number>();
+      if ((counts.get(key) ?? 0) >= limit) continue;
+      if (exclusiveWith && (counts.get(exclusiveWith) ?? 0) > 0) continue;
+
+      insertWinner.run(item.id, claimant.telegram_id);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+      groupCounts.set(claimant.telegram_id, counts);
+      remaining -= 1;
+    }
+  }
 }
 
 export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
@@ -244,7 +305,10 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
       // deadline jump forward to "now".
       const alreadyPast = !!event.deadline_at && new Date(event.deadline_at).getTime() < Date.now();
       const deadlineAt = alreadyPast ? (event.deadline_at as string) : new Date().toISOString();
-      deps.db.prepare("UPDATE events SET status = 'resolved', deadline_at = ? WHERE id = ?").run(deadlineAt, eventId);
+      deps.db.transaction(() => {
+        drawWinners(deps, eventId);
+        deps.db.prepare("UPDATE events SET status = 'resolved', deadline_at = ? WHERE id = ?").run(deadlineAt, eventId);
+      })();
       publishChange();
       return { ok: true };
     }

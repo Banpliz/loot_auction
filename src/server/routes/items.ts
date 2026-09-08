@@ -126,9 +126,17 @@ export function cancelClaim(deps: AppDeps, itemId: number, telegramId: number): 
       | undefined;
     if (!claim) return false;
     deps.db.prepare('DELETE FROM claims WHERE item_id = ? AND telegram_id = ?').run(itemId, telegramId);
-    // Giving the units back always returns the lot to 'pool', even if claiming it was
-    // what had taken it to 'auctioned' (sold out) — the quantity math is symmetric.
-    deps.db.prepare("UPDATE items SET quantity = quantity + ?, status = 'pool' WHERE id = ?").run(claim.quantity, itemId);
+
+    // Invasion still reserves stock instantly on claim (see the claim handler below), so
+    // withdrawing has to give those units back. Every other template (feast) now treats a
+    // claim as a plain, non-reserving raffle entry — nothing was decremented, so there's
+    // nothing to return.
+    const template = deps.db
+      .prepare(`SELECT s.template FROM items i JOIN screenshots s ON s.id = i.screenshot_id WHERE i.id = ?`)
+      .get(itemId) as { template: string } | undefined;
+    if (template?.template === 'invasion') {
+      deps.db.prepare("UPDATE items SET quantity = quantity + ?, status = 'pool' WHERE id = ?").run(claim.quantity, itemId);
+    }
     return true;
   })();
   if (cancelled) publishChange();
@@ -432,10 +440,6 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
   app.post<{ Params: { id: string }; Body: { quantity?: number } }>('/items/:id/claim', async (request, reply) => {
     const itemId = Number(request.params.id);
     const userId = request.telegramUser!.telegramId;
-    // Blue invasion lots allow winning up to 2 units per event (see winLimitGroup), so a
-    // single claim can reserve more than one unit at once instead of forcing two separate
-    // claims across two different lots. Every other case keeps sending no quantity at all.
-    const quantity = request.body?.quantity ?? 1;
 
     const item = deps.db
       .prepare(
@@ -450,13 +454,23 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
       reply.code(409).send({ error: 'item is not claimable' });
       return;
     }
-    if (!Number.isInteger(quantity) || quantity < 1) {
-      reply.code(400).send({ error: 'quantity must be a positive integer' });
-      return;
-    }
-    if (quantity > item.quantity) {
-      reply.code(409).send({ error: 'not enough remaining quantity' });
-      return;
+
+    // Invasion still reserves stock instantly, up to the win-limit rules below (including
+    // its own blue-2-at-once quantity) — none of that changed. Every other template (feast)
+    // went back to a raffle: a claim is just an entry, always worth exactly one unit
+    // regardless of what's requested, since a raffle draw only ever hands one unit of a lot
+    // to one person (see item_winners' UNIQUE(item_id, telegram_id) in db.ts).
+    const isInvasion = item.template === 'invasion';
+    const quantity = isInvasion ? request.body?.quantity ?? 1 : 1;
+    if (isInvasion) {
+      if (!Number.isInteger(quantity) || quantity < 1) {
+        reply.code(400).send({ error: 'quantity must be a positive integer' });
+        return;
+      }
+      if (quantity > item.quantity) {
+        reply.code(409).send({ error: 'not enough remaining quantity' });
+        return;
+      }
     }
 
     const event = deps.db.prepare('SELECT status FROM events WHERE id = ?').get(item.event_id) as
@@ -485,46 +499,52 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
       return;
     }
 
-    // Invasion purple has its own rule — a daily cap by rank, across every event, plus a
-    // flat 1-per-event ceiling that applies to everyone regardless of rank (see
-    // getUserPurpleClaimedInEvent) — so it skips winLimitGroup/getUserGroupCounts entirely.
-    if (item.template === 'invasion' && item.color === 'purple') {
-      const claimedInEvent = getUserPurpleClaimedInEvent(deps, item.event_id, userId);
-      if (claimedInEvent + quantity > PURPLE_PER_EVENT_LIMIT) {
-        reply.code(409).send({ error: 'win limit reached' });
-        return;
+    if (isInvasion) {
+      // Invasion purple has its own rule — a daily cap by rank, across every event, plus a
+      // flat 1-per-event ceiling that applies to everyone regardless of rank (see
+      // getUserPurpleClaimedInEvent) — so it skips winLimitGroup/getUserGroupCounts entirely.
+      if (item.color === 'purple') {
+        const claimedInEvent = getUserPurpleClaimedInEvent(deps, item.event_id, userId);
+        if (claimedInEvent + quantity > PURPLE_PER_EVENT_LIMIT) {
+          reply.code(409).send({ error: 'win limit reached' });
+          return;
+        }
+        const dailyLimit = isOfficerRank(deps, userId) ? OFFICER_DAILY_PURPLE_LIMIT : MEMBER_DAILY_PURPLE_LIMIT;
+        const claimedToday = getPurpleClaimedToday(deps, userId);
+        if (claimedToday + quantity > dailyLimit) {
+          reply.code(409).send({ error: 'daily purple limit reached' });
+          return;
+        }
+      } else {
+        const { key, limit, exclusiveWith } = winLimitGroup(item.template, item.color, item.category);
+        const counts = getUserGroupCounts(deps, item.event_id, userId);
+        if ((counts.get(key) ?? 0) + quantity > limit) {
+          reply.code(409).send({ error: 'win limit reached' });
+          return;
+        }
+        if (exclusiveWith && (counts.get(exclusiveWith) ?? 0) > 0) {
+          reply.code(409).send({ error: 'already won in the other category' });
+          return;
+        }
       }
-      const dailyLimit = isOfficerRank(deps, userId) ? OFFICER_DAILY_PURPLE_LIMIT : MEMBER_DAILY_PURPLE_LIMIT;
-      const claimedToday = getPurpleClaimedToday(deps, userId);
-      if (claimedToday + quantity > dailyLimit) {
-        reply.code(409).send({ error: 'daily purple limit reached' });
-        return;
-      }
-    } else {
-      const { key, limit, exclusiveWith } = winLimitGroup(item.template, item.color, item.category);
-      const counts = getUserGroupCounts(deps, item.event_id, userId);
-      if ((counts.get(key) ?? 0) + quantity > limit) {
-        reply.code(409).send({ error: 'win limit reached' });
-        return;
-      }
-      if (exclusiveWith && (counts.get(exclusiveWith) ?? 0) > 0) {
-        reply.code(409).send({ error: 'already won in the other category' });
-        return;
-      }
-    }
 
-    // Claiming a lot immediately reserves the requested units of it — first come, first
-    // served — instead of just registering interest for a later random draw. Wrapped in a
-    // transaction so a crash between the two writes can't leave a claim row without the
-    // matching stock decrement (or vice versa).
-    const claimUnits = deps.db.transaction(() => {
-      deps.db.prepare('INSERT INTO claims (item_id, telegram_id, quantity) VALUES (?, ?, ?)').run(itemId, userId, quantity);
-      const remaining = item.quantity - quantity;
-      deps.db
-        .prepare('UPDATE items SET quantity = ?, status = ? WHERE id = ?')
-        .run(remaining, remaining <= 0 ? 'auctioned' : 'pool', itemId);
-    });
-    claimUnits();
+      // Claiming an invasion lot immediately reserves the requested units of it — first
+      // come, first served. Wrapped in a transaction so a crash between the two writes
+      // can't leave a claim row without the matching stock decrement (or vice versa).
+      const claimUnits = deps.db.transaction(() => {
+        deps.db.prepare('INSERT INTO claims (item_id, telegram_id, quantity) VALUES (?, ?, ?)').run(itemId, userId, quantity);
+        const remaining = item.quantity - quantity;
+        deps.db
+          .prepare('UPDATE items SET quantity = ?, status = ? WHERE id = ?')
+          .run(remaining, remaining <= 0 ? 'auctioned' : 'pool', itemId);
+      });
+      claimUnits();
+    } else {
+      // Feast: just register interest. Stock isn't touched and the lot's fate — who
+      // actually wins a unit of it, respecting the item/stone category cap and their
+      // mutual exclusion — is decided by the random draw in POST /events/:id/finish.
+      deps.db.prepare('INSERT INTO claims (item_id, telegram_id, quantity) VALUES (?, ?, 1)').run(itemId, userId);
+    }
     publishChange();
 
     return { ok: true };

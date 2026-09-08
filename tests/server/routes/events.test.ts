@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { openDb, type Db } from '../../../src/server/db';
 import { buildServer } from '../../../src/server/server';
-import { signUserInitData } from '../../test-helpers';
+import { signUserInitData, approveTestUser } from '../../test-helpers';
 import type { FastifyInstance } from 'fastify';
 
 describe('events routes', () => {
@@ -277,7 +277,7 @@ describe('events routes', () => {
     expect(res.statusCode).toBe(409);
   });
 
-  it('claimed items show up in the winners list once sold out; unclaimed items stay in the pool', async () => {
+  it('a feast item drawn a winner (item_winners) reports it; one nobody claimed reports none', async () => {
     const createRes = await app.inject({
       method: 'POST',
       url: '/api/events',
@@ -289,20 +289,16 @@ describe('events routes', () => {
     const screenshot = db
       .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
       .run(eventId, '/tmp/original.png');
-    // Seeded directly (status/quantity/claims all set by hand) rather than via
-    // POST /items/:id/claim — the claim endpoint's own quantity-decrement and
-    // status-flip-to-auctioned behavior belongs to Task 3, not this task. This test only
-    // verifies that GET /events/current's winners list reads from claims (this task's
-    // attachWinners rewrite), independent of whichever later task produces that state.
+    // Seeded directly rather than via a real finish()-driven draw — this test only checks
+    // that GET /events/current's winners list reads a feast item's winners from
+    // item_winners (attachWinners), independent of the draw logic that populates it.
     const claimedItem = db
-      .prepare(
-        "INSERT INTO items (event_id, screenshot_id, name, image_path, status, quantity) VALUES (?, ?, 'Меч', 'items/a.png', 'auctioned', 0)"
-      )
+      .prepare("INSERT INTO items (event_id, screenshot_id, name, image_path, status) VALUES (?, ?, 'Меч', 'items/a.png', 'pool')")
       .run(eventId, screenshot.lastInsertRowid);
     const unclaimedItem = db
       .prepare("INSERT INTO items (event_id, screenshot_id, name, image_path, status) VALUES (?, ?, 'Щит', 'items/b.png', 'pool')")
       .run(eventId, screenshot.lastInsertRowid);
-    db.prepare('INSERT INTO claims (item_id, telegram_id) VALUES (?, 2)').run(claimedItem.lastInsertRowid);
+    db.prepare('INSERT INTO item_winners (item_id, telegram_id) VALUES (?, 2)').run(claimedItem.lastInsertRowid);
 
     await app.inject({
       method: 'POST',
@@ -315,7 +311,6 @@ describe('events routes', () => {
     const body = poolRes.json();
 
     const claimed = body.items.find((i: any) => i.id === claimedItem.lastInsertRowid);
-    expect(claimed.status).toBe('auctioned');
     expect(claimed.winners).toEqual([{ telegramId: 2, nickname: 'Bob', quantity: 1 }]);
 
     const unclaimed = body.items.find((i: any) => i.id === unclaimedItem.lastInsertRowid);
@@ -351,16 +346,16 @@ describe('events routes', () => {
     expect(adminRes.json().items.find((i: any) => i.id === item.lastInsertRowid).template).toBe('invasion');
   });
 
-  it('winners list reports how many units a claim reserved', async () => {
+  it("an invasion lot's winners list reports how many units a claim reserved (its instant-reservation claims are still its winners)", async () => {
     const createRes = await app.inject({
       method: 'POST',
       url: '/api/events',
       headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
-      payload: { title: 'Ивент' },
+      payload: { title: 'Вторжение' },
     });
     const eventId = createRes.json().id;
     const screenshot = db
-      .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
+      .prepare("INSERT INTO screenshots (event_id, original_path, rows, template, uploaded_by) VALUES (?, ?, 1, 'invasion', 1)")
       .run(eventId, '/tmp/original.png');
     const item = db
       .prepare(
@@ -479,12 +474,10 @@ describe('events routes', () => {
     expect(db.prepare('SELECT * FROM claims WHERE item_id = ?').get(itemId)).toBeUndefined();
   });
 
-  it('DELETE /events/:id succeeds even when legacy item_winners rows exist for its items', async () => {
-    // item_winners is no longer written to by any live endpoint (see design doc), but the
-    // table is deliberately kept in the schema rather than dropped, so a row from before
-    // this change could still be sitting there. This simulates that with a direct insert
-    // and confirms the delete's existing item_winners cleanup still prevents the FK
-    // violation it was originally added to fix.
+  it('DELETE /events/:id succeeds even when item_winners rows exist for its items', async () => {
+    // item_winners is written by the random draw in POST /events/:id/finish (see
+    // drawWinners), so a resolved event can have rows here. This confirms the delete's
+    // item_winners cleanup still prevents the FK violation it was originally added to fix.
     const createRes = await app.inject({
       method: 'POST',
       url: '/api/events',
@@ -503,5 +496,116 @@ describe('events routes', () => {
     const del = await app.inject({ method: 'DELETE', url: `/api/events/${eventId}`, headers: { 'x-telegram-init-data': adminInitData } });
     expect(del.statusCode).toBe(200);
     expect(db.prepare('SELECT * FROM item_winners WHERE item_id = ?').get(itemId)).toBeUndefined();
+  });
+
+  describe('POST /events/:id/finish draws feast winners', () => {
+    let eventId: number;
+    let carolInitData: string;
+
+    beforeEach(async () => {
+      carolInitData = signUserInitData(3, 'carol', botToken);
+      approveTestUser(db, 3);
+      const createRes = await app.inject({
+        method: 'POST',
+        url: '/api/events',
+        headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+        payload: { title: 'Пир' },
+      });
+      eventId = createRes.json().id;
+      // Set straight to open rather than going through POST /start — /start's own
+      // synchronized 10s pre-start countdown (starts_at) would otherwise reject claims
+      // made immediately after it, which these tests don't care about.
+      db.prepare("UPDATE events SET status = 'open' WHERE id = ?").run(eventId);
+    });
+
+    it('draws exactly one winner among several claimants for a quantity-1 lot', async () => {
+      const screenshotId = db
+        .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
+        .run(eventId, '/tmp/o.png').lastInsertRowid as number;
+      const itemId = db
+        .prepare("INSERT INTO items (event_id, screenshot_id, name, image_path, status) VALUES (?, ?, 'Меч', 'items/a.png', 'pool')")
+        .run(eventId, screenshotId).lastInsertRowid as number;
+
+      await app.inject({ method: 'POST', url: `/api/items/${itemId}/claim`, headers: { 'x-telegram-init-data': memberInitData } });
+      await app.inject({ method: 'POST', url: `/api/items/${itemId}/claim`, headers: { 'x-telegram-init-data': carolInitData } });
+
+      await app.inject({ method: 'POST', url: `/api/events/${eventId}/finish`, headers: { 'x-telegram-init-data': adminInitData } });
+
+      const winners = db.prepare('SELECT telegram_id FROM item_winners WHERE item_id = ?').all(itemId) as { telegram_id: number }[];
+      expect(winners).toHaveLength(1);
+      expect([2, 3]).toContain(winners[0].telegram_id);
+    });
+
+    it('draws up to `quantity` distinct winners, never more than there are claimants', async () => {
+      const screenshotId = db
+        .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
+        .run(eventId, '/tmp/o.png').lastInsertRowid as number;
+      const itemId = db
+        .prepare(
+          "INSERT INTO items (event_id, screenshot_id, name, image_path, status, category, quantity) VALUES (?, ?, 'Камень', 'items/s.png', 'pool', 'stone', 5)"
+        )
+        .run(eventId, screenshotId).lastInsertRowid as number;
+
+      await app.inject({ method: 'POST', url: `/api/items/${itemId}/claim`, headers: { 'x-telegram-init-data': memberInitData } });
+      await app.inject({ method: 'POST', url: `/api/items/${itemId}/claim`, headers: { 'x-telegram-init-data': carolInitData } });
+
+      await app.inject({ method: 'POST', url: `/api/events/${eventId}/finish`, headers: { 'x-telegram-init-data': adminInitData } });
+
+      const winners = db.prepare('SELECT telegram_id FROM item_winners WHERE item_id = ?').all(itemId) as { telegram_id: number }[];
+      expect(winners.map((w) => w.telegram_id).sort()).toEqual([2, 3]); // only 2 claimants, even though quantity is 5
+    });
+
+    it('keeps the item/stone mutual exclusion at draw time: winning a stone rules out winning gear too', async () => {
+      const screenshotId = db
+        .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
+        .run(eventId, '/tmp/o.png').lastInsertRowid as number;
+      const insertItem = db.prepare(
+        "INSERT INTO items (event_id, screenshot_id, name, image_path, status, category) VALUES (?, ?, ?, 'items/x.png', 'pool', ?)"
+      );
+      const stoneA = insertItem.run(eventId, screenshotId, 'Камень А', 'stone').lastInsertRowid as number;
+      const gearA = insertItem.run(eventId, screenshotId, 'Меч А', 'item').lastInsertRowid as number;
+      const gearB = insertItem.run(eventId, screenshotId, 'Меч Б', 'item').lastInsertRowid as number;
+
+      // Bob is the sole claimant on all three. Gear's own category cap (1) alone would
+      // still let him win one gear lot on top of the stone — only mutual exclusion between
+      // the two categories brings his total win count down to exactly one, whichever lot
+      // the shuffle happens to resolve first.
+      for (const itemId of [stoneA, gearA, gearB]) {
+        await app.inject({ method: 'POST', url: `/api/items/${itemId}/claim`, headers: { 'x-telegram-init-data': memberInitData } });
+      }
+      await app.inject({ method: 'POST', url: `/api/events/${eventId}/finish`, headers: { 'x-telegram-init-data': adminInitData } });
+
+      const bobWins = db.prepare('SELECT item_id FROM item_winners WHERE telegram_id = 2').all() as { item_id: number }[];
+      expect(bobWins).toHaveLength(1);
+    });
+
+    it("doesn't touch invasion lots — they already resolved instantly on claim", async () => {
+      const screenshotId = db
+        .prepare("INSERT INTO screenshots (event_id, original_path, rows, template, uploaded_by) VALUES (?, ?, 1, 'invasion', 1)")
+        .run(eventId, '/tmp/inv.png').lastInsertRowid as number;
+      const itemId = db
+        .prepare(
+          "INSERT INTO items (event_id, screenshot_id, name, image_path, status, color, quantity) VALUES (?, ?, 'Blue', 'items/x.png', 'pool', 'blue', 2)"
+        )
+        .run(eventId, screenshotId).lastInsertRowid as number;
+      await app.inject({ method: 'POST', url: `/api/items/${itemId}/claim`, headers: { 'x-telegram-init-data': memberInitData } });
+
+      await app.inject({ method: 'POST', url: `/api/events/${eventId}/finish`, headers: { 'x-telegram-init-data': adminInitData } });
+
+      expect(db.prepare('SELECT COUNT(*) as n FROM item_winners WHERE item_id = ?').get(itemId)).toMatchObject({ n: 0 });
+    });
+
+    it('a lot nobody claimed stays unwon', async () => {
+      const screenshotId = db
+        .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
+        .run(eventId, '/tmp/o.png').lastInsertRowid as number;
+      const itemId = db
+        .prepare("INSERT INTO items (event_id, screenshot_id, name, image_path, status) VALUES (?, ?, 'Никто', 'items/a.png', 'pool')")
+        .run(eventId, screenshotId).lastInsertRowid as number;
+
+      await app.inject({ method: 'POST', url: `/api/events/${eventId}/finish`, headers: { 'x-telegram-init-data': adminInitData } });
+
+      expect(db.prepare('SELECT COUNT(*) as n FROM item_winners WHERE item_id = ?').get(itemId)).toMatchObject({ n: 0 });
+    });
   });
 });
