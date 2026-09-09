@@ -16,7 +16,7 @@ export function registerParticipantRoutes(app: FastifyInstance, deps: AppDeps) {
       )
       .all() as { telegramId: number; username: string | null; gameNickname: string | null; status: string; rank: string; class: string }[];
 
-    return { participants: rows.filter((r) => !deps.adminTelegramIds.includes(r.telegramId)) };
+    return { participants: rows };
   });
 
   // '' clears the class back to "not set" — see users.class's default in db.ts.

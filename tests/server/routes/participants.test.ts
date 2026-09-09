@@ -25,11 +25,12 @@ describe('participants routes', () => {
     expect(res.statusCode).toBe(403);
   });
 
-  it('GET /participants lists non-admin users and excludes admins', async () => {
+  it('GET /participants lists everyone, admins included, so an admin can be assigned a class too', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/participants', headers: { 'x-telegram-init-data': adminInitData } });
     expect(res.statusCode).toBe(200);
     const { participants } = res.json();
-    expect(participants).toEqual([
+    expect(participants.sort((a: any, b: any) => a.telegramId - b.telegramId)).toEqual([
+      { telegramId: 1, username: 'admin', gameNickname: null, status: 'approved', rank: 'member', class: '' },
       { telegramId: 2, username: 'alice', gameNickname: 'Alice', status: 'pending', rank: 'member', class: '' },
     ]);
   });
