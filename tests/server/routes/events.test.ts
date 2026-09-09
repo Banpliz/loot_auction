@@ -555,28 +555,52 @@ describe('events routes', () => {
       expect(winners.map((w) => w.telegram_id).sort()).toEqual([2, 3]); // only 2 claimants, even though quantity is 5
     });
 
-    it('keeps the item/stone mutual exclusion at draw time: winning a stone rules out winning gear too', async () => {
+    it('keeps the item/stone mutual exclusion at draw time: gear and a temper stone never both go to the same person', async () => {
       const screenshotId = db
         .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
         .run(eventId, '/tmp/o.png').lastInsertRowid as number;
       const insertItem = db.prepare(
         "INSERT INTO items (event_id, screenshot_id, name, image_path, status, category) VALUES (?, ?, ?, 'items/x.png', 'pool', ?)"
       );
-      const stoneA = insertItem.run(eventId, screenshotId, 'Камень А', 'stone').lastInsertRowid as number;
+      const stoneA = insertItem.run(eventId, screenshotId, 'Камень А', 'stone_temper').lastInsertRowid as number;
       const gearA = insertItem.run(eventId, screenshotId, 'Меч А', 'item').lastInsertRowid as number;
       const gearB = insertItem.run(eventId, screenshotId, 'Меч Б', 'item').lastInsertRowid as number;
 
-      // Bob is the sole claimant on all three. Gear's own category cap (1) alone would
-      // still let him win one gear lot on top of the stone — only mutual exclusion between
-      // the two categories brings his total win count down to exactly one, whichever lot
-      // the shuffle happens to resolve first.
+      // Bob is the sole claimant on all three. Gear's own category cap (2) alone would
+      // still let him win both gear lots on top of the stone — only mutual exclusion
+      // between the two categories keeps him from also winning the stone (or vice versa),
+      // whichever kind the shuffle happens to resolve first.
       for (const itemId of [stoneA, gearA, gearB]) {
         await app.inject({ method: 'POST', url: `/api/items/${itemId}/claim`, headers: { 'x-telegram-init-data': memberInitData } });
       }
       await app.inject({ method: 'POST', url: `/api/events/${eventId}/finish`, headers: { 'x-telegram-init-data': adminInitData } });
 
+      const bobWins = db
+        .prepare(
+          `SELECT i.category FROM item_winners w JOIN items i ON i.id = w.item_id WHERE w.telegram_id = 2`
+        )
+        .all() as { category: string }[];
+      const categories = new Set(bobWins.map((w) => w.category));
+      expect(categories.size).toBeLessThanOrEqual(1); // never both 'item' and 'stone_temper' at once
+    });
+
+    it('the two stone kinds are independent: winning a temper stone does not block winning a remelt stone too', async () => {
+      const screenshotId = db
+        .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
+        .run(eventId, '/tmp/o.png').lastInsertRowid as number;
+      const insertItem = db.prepare(
+        "INSERT INTO items (event_id, screenshot_id, name, image_path, status, category) VALUES (?, ?, ?, 'items/x.png', 'pool', ?)"
+      );
+      const temperId = insertItem.run(eventId, screenshotId, 'Закалка', 'stone_temper').lastInsertRowid as number;
+      const remeltId = insertItem.run(eventId, screenshotId, 'Переплавка', 'stone_remelt').lastInsertRowid as number;
+
+      for (const itemId of [temperId, remeltId]) {
+        await app.inject({ method: 'POST', url: `/api/items/${itemId}/claim`, headers: { 'x-telegram-init-data': memberInitData } });
+      }
+      await app.inject({ method: 'POST', url: `/api/events/${eventId}/finish`, headers: { 'x-telegram-init-data': adminInitData } });
+
       const bobWins = db.prepare('SELECT item_id FROM item_winners WHERE telegram_id = 2').all() as { item_id: number }[];
-      expect(bobWins).toHaveLength(1);
+      expect(bobWins.map((w) => w.item_id).sort()).toEqual([temperId, remeltId].sort());
     });
 
     it("doesn't touch invasion lots — they already resolved instantly on claim", async () => {
@@ -665,6 +689,29 @@ describe('events routes', () => {
       const res = await app.inject({ method: 'GET', url: `/api/events/${eventId}/results`, headers: { 'x-telegram-init-data': memberInitData } });
       const results = res.json().results as { nickname: string | null; won: { name: string; quantity: number }[] }[];
       expect(results).toEqual([{ telegramId: 2, nickname: 'Bob', won: [{ name: 'Blue', color: 'blue', imagePath: 'items/x.png', quantity: 2 }] }]);
+    });
+
+    it('one person winning both a temper and a remelt stone shows up as a single row with both, not two rows', async () => {
+      db.prepare("INSERT INTO users (telegram_id, username) VALUES (1, 'admin')").run();
+      const eventId = db.prepare("INSERT INTO events (title, status) VALUES ('Пир', 'open')").run().lastInsertRowid as number;
+      const screenshotId = db
+        .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
+        .run(eventId, '/tmp/o.png').lastInsertRowid as number;
+      const insertItem = db.prepare(
+        "INSERT INTO items (event_id, screenshot_id, name, image_path, status, category) VALUES (?, ?, ?, 'items/x.png', 'pool', ?)"
+      );
+      const temperId = insertItem.run(eventId, screenshotId, 'Закалка', 'stone_temper').lastInsertRowid as number;
+      const remeltId = insertItem.run(eventId, screenshotId, 'Переплавка', 'stone_remelt').lastInsertRowid as number;
+
+      for (const itemId of [temperId, remeltId]) {
+        await app.inject({ method: 'POST', url: `/api/items/${itemId}/claim`, headers: { 'x-telegram-init-data': memberInitData } });
+      }
+      await app.inject({ method: 'POST', url: `/api/events/${eventId}/finish`, headers: { 'x-telegram-init-data': adminInitData } });
+
+      const res = await app.inject({ method: 'GET', url: `/api/events/${eventId}/results`, headers: { 'x-telegram-init-data': memberInitData } });
+      const results = res.json().results as { nickname: string | null; won: { name: string }[] }[];
+      expect(results).toHaveLength(1); // one row for Bob, not two
+      expect(results[0].won.map((w) => w.name).sort()).toEqual(['Закалка', 'Переплавка']);
     });
   });
 });

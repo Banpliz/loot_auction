@@ -121,7 +121,7 @@ describe('POST /api/events/:id/screenshots', () => {
     const putRes = await fetch(`${baseUrl}/api/items/${firstItemId}`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json', 'x-telegram-init-data': adminInitData },
-      body: JSON.stringify({ name: 'Камень душ', category: 'stone' }),
+      body: JSON.stringify({ name: 'Камень душ', category: 'stone_temper' }),
     });
     expect(putRes.status).toBe(200);
 
@@ -140,7 +140,7 @@ describe('POST /api/events/:id/screenshots', () => {
 
     const row = db.prepare('SELECT name, category FROM items WHERE id = ?').get(secondItemId) as any;
     expect(row.name).toBe('Камень душ');
-    expect(row.category).toBe('stone');
+    expect(row.category).toBe('stone_temper');
   });
 
   it('never reuses an icon file path even when SQLite recycles the screenshot id (delete-then-recreate workflow)', async () => {

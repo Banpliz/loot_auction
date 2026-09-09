@@ -87,11 +87,11 @@ describe('items routes', () => {
       method: 'PUT',
       url: `/api/items/${itemAId}`,
       headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
-      payload: { category: 'stone' },
+      payload: { category: 'stone_temper' },
     });
     expect(res.statusCode).toBe(200);
     const row = db.prepare('SELECT category FROM items WHERE id = ?').get(itemAId) as any;
-    expect(row.category).toBe('stone');
+    expect(row.category).toBe('stone_temper');
 
     const invalid = await app.inject({
       method: 'PUT',
@@ -156,7 +156,7 @@ describe('items routes', () => {
 
   it('a feast claim always registers exactly one unit of interest, regardless of requested quantity', async () => {
     db.prepare("UPDATE events SET status = 'open' WHERE id = ?").run(eventId);
-    db.prepare("UPDATE items SET quantity = 3, category = 'stone' WHERE id = ?").run(itemAId);
+    db.prepare("UPDATE items SET quantity = 3, category = 'stone_temper' WHERE id = ?").run(itemAId);
     const res = await app.inject({
       method: 'POST',
       url: `/api/items/${itemAId}/claim`,
@@ -216,10 +216,11 @@ describe('items routes', () => {
   });
 
   it('a user can claim two different lots that fall in different win-limit groups', async () => {
-    // itemA/itemB's screenshot defaults to feast (see beforeEach), where category
-    // 'item' vs 'stone' are mutually exclusive (see the dedicated test below), so they
-    // can't stand in for "different, independent groups" here. Invasion's color groups
-    // (purple+red vs blue) aren't exclusive of each other, so use those instead.
+    // itemA/itemB's screenshot defaults to feast (see beforeEach), where 'item' is
+    // mutually exclusive with both stone categories (see events.test.ts's dedicated
+    // tests), so they can't stand in for "different, independent groups" here.
+    // Invasion's color groups (purple+red vs blue) aren't exclusive of each other, so
+    // use those instead.
     const invasionEventId = db
       .prepare("INSERT INTO events (title, status) VALUES ('Разные группы', 'open')")
       .run().lastInsertRowid as number;

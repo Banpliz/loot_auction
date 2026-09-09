@@ -184,7 +184,7 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
                 (c) => `<option value="${c.value}" ${item.color === c.value ? 'selected' : ''}>${c.label}</option>`
               ).join('')}
             </select>
-            <select data-role="category" title="Только для пира победы: лимит на камни закалки — 3, на остальное — 1">
+            <select data-role="category" title="Только для пира победы: предмет — лимит 2, камень закалки — 3, камень переплавки — 1. Предмет исключает оба вида камней; камни закалки и переплавки друг другу не мешают.">
               ${ITEM_CATEGORIES.map(
                 (c) => `<option value="${c.value}" ${item.category === c.value ? 'selected' : ''}>${c.label}</option>`
               ).join('')}

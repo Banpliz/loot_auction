@@ -8,11 +8,14 @@ export function colorHex(color: string | null | undefined): string {
   return ITEM_COLORS.find((c) => c.value === color)?.hex ?? 'transparent';
 }
 
-// Feast-only win-limit dimension (gear capped at 1/person, tempering stones at 3) —
-// see winLimitGroup in src/server/routes/events.ts. Irrelevant for invasion lots.
+// Feast-only win-limit dimension (gear capped at 2/person, tempering stones at 3,
+// remelting stones at 1 — see winLimitGroup in src/server/routes/events.ts). Gear is
+// mutually exclusive with both stone kinds; the two stone kinds aren't exclusive of each
+// other. Irrelevant for invasion lots.
 export const ITEM_CATEGORIES: { value: string; label: string }[] = [
   { value: 'item', label: 'Предмет' },
-  { value: 'stone', label: 'Камень' },
+  { value: 'stone_temper', label: 'Закалка' },
+  { value: 'stone_remelt', label: 'Переплавка' },
 ];
 
 // Same value set for both a participant's class (users.class) and a lot's class

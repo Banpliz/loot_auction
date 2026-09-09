@@ -177,9 +177,7 @@ export async function renderPool(root: HTMLElement) {
                   : ''
               }`
             : biddingClosed
-              ? item.winners.length > 0
-                ? renderWinners('Приём заявок завершён', item.winners)
-                : `<p class="badge">Приём заявок окончен</p>`
+              ? `<p class="badge">Приём заявок окончен</p>`
               : item.claimedByMe
                 ? `<button data-action="unclaim" class="btn-sm btn-secondary">Отменить</button>`
                 : claimControl(item)

@@ -12,7 +12,7 @@ import { publishChange } from '../pubsub';
 import { INVASION_CATALOG } from '../invasion-catalog';
 
 const VALID_COLORS = new Set(['blue', 'purple', 'red']);
-const VALID_CATEGORIES = new Set(['item', 'stone']);
+const VALID_CATEGORIES = new Set(['item', 'stone_temper', 'stone_remelt']);
 // Same value set as users.class — see the claim handler below and web/format.ts's CLASSES.
 const VALID_CLASSES = new Set(['tank', 'rogue', 'mage', 'healer', 'hunter']);
 
@@ -248,7 +248,7 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
         return;
       }
       if (category !== undefined && !VALID_CATEGORIES.has(category)) {
-        reply.code(400).send({ error: 'category must be item or stone' });
+        reply.code(400).send({ error: 'category must be item, stone_temper, or stone_remelt' });
         return;
       }
       if (quantity !== undefined && (!Number.isInteger(quantity) || quantity < 1)) {
@@ -549,7 +549,7 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
           reply.code(409).send({ error: 'win limit reached' });
           return;
         }
-        if (exclusiveWith && (counts.get(exclusiveWith) ?? 0) > 0) {
+        if (exclusiveWith?.some((other) => (counts.get(other) ?? 0) > 0)) {
           reply.code(409).send({ error: 'already won in the other category' });
           return;
         }

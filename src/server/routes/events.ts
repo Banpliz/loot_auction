@@ -15,36 +15,46 @@ interface EventRow {
 const START_DELAY_MS = 10_000;
 
 type ColorGroup = 'red' | 'blue';
-type CategoryGroup = 'item' | 'stone';
+// 'stone' is a legacy category value (pre-2026-09-09, when there was only one kind of
+// camni) — categoryGroup() below folds it into 'stone_temper', the closer match (same
+// cap of 3 the old shared 'stone' group had).
+type CategoryGroup = 'item' | 'stone_temper' | 'stone_remelt';
 
 // Fixed by design, not admin-configurable. Invasion caps blue at 2/event and red at
 // 1/event. Purple used to share red's group (combined 1/event) but now has its own rule
 // entirely — a daily, rank-based cap across every event, not a per-event one — see
 // items.ts's getPurpleClaimedToday; this function is never consulted for purple anymore.
-// Feast's alliance rule cuts across colors instead — gear (armor/weapons/etc.) capped at
-// 1, tempering stones at 3 — so it's grouped by admin-set item.category rather than
-// color. The two feast groups are also mutually exclusive (2026-08-28): winning a stone
-// rules a person out of ever winning gear in the same event, and vice versa. Originally
-// enforced once at the end-of-event draw; now enforced by items.ts's claim endpoint on
-// every single claim attempt (2026-08-31), since there's no more draw step — see
-// docs/superpowers/specs/2026-08-31-fcfs-reservation-design.md.
+// Feast's alliance rule cuts across colors instead, grouped by admin-set item.category:
+// gear capped at 2, tempering stones (closer, more plentiful) at 3, remelting stones
+// (rarer, add properties) at 1. Gear is mutually exclusive with BOTH stone kinds — winning
+// any gear rules out winning either kind of stone, and vice versa — but the two stone
+// kinds are independent of each other (2026-09-09): winning a temper stone doesn't block
+// winning a remelt stone too. Originally enforced once at the end-of-event draw; now
+// enforced by items.ts's claim endpoint on every single claim attempt (2026-08-31), since
+// there's no more draw step — see docs/superpowers/specs/2026-08-31-fcfs-reservation-design.md.
 const COLOR_WIN_LIMITS: Record<ColorGroup, number> = { red: 1, blue: 2 };
-const CATEGORY_WIN_LIMITS: Record<CategoryGroup, number> = { item: 1, stone: 3 };
+const CATEGORY_WIN_LIMITS: Record<CategoryGroup, number> = { item: 2, stone_temper: 3, stone_remelt: 1 };
 
 function colorGroup(color: string): ColorGroup {
   return color === 'blue' ? 'blue' : 'red';
 }
 
+function categoryGroup(category: string): CategoryGroup {
+  if (category === 'stone_remelt') return 'stone_remelt';
+  if (category === 'item') return 'item';
+  return 'stone_temper';
+}
+
 // Returns a per-person counter key (namespaced so a color group and a category group
 // can never collide), the cap that applies to it, and — for feast only — the other
-// category's key: any existing win there makes a person ineligible for this one too.
-// Exported for items.ts's claim endpoint. Never called with color 'purple' under
+// group key(s): an existing win in any of them makes a person ineligible for this one
+// too. Exported for items.ts's claim endpoint. Never called with color 'purple' under
 // template 'invasion' — items.ts intercepts that case before reaching this function.
-export function winLimitGroup(template: string, color: string, category: string): { key: string; limit: number; exclusiveWith?: string } {
+export function winLimitGroup(template: string, color: string, category: string): { key: string; limit: number; exclusiveWith?: string[] } {
   if (template === 'feast') {
-    const group: CategoryGroup = category === 'stone' ? 'stone' : 'item';
-    const other: CategoryGroup = group === 'stone' ? 'item' : 'stone';
-    return { key: `cat:${group}`, limit: CATEGORY_WIN_LIMITS[group], exclusiveWith: `cat:${other}` };
+    const group = categoryGroup(category);
+    const exclusiveWith = group === 'item' ? ['cat:stone_temper', 'cat:stone_remelt'] : ['cat:item'];
+    return { key: `cat:${group}`, limit: CATEGORY_WIN_LIMITS[group], exclusiveWith };
   }
   const group = colorGroup(color);
   return { key: `color:${group}`, limit: COLOR_WIN_LIMITS[group] };
@@ -137,7 +147,7 @@ function drawWinners(deps: AppDeps, eventId: number): void {
       if (remaining <= 0) break;
       const counts = groupCounts.get(claimant.telegram_id) ?? new Map<string, number>();
       if ((counts.get(key) ?? 0) >= limit) continue;
-      if (exclusiveWith && (counts.get(exclusiveWith) ?? 0) > 0) continue;
+      if (exclusiveWith?.some((other) => (counts.get(other) ?? 0) > 0)) continue;
 
       insertWinner.run(item.id, claimant.telegram_id);
       counts.set(key, (counts.get(key) ?? 0) + 1);
