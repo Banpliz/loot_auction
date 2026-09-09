@@ -9,6 +9,7 @@ interface Me {
   telegramId: number;
   username: string | null;
   gameNickname: string | null;
+  class: string;
   status: 'pending' | 'approved' | 'banned';
   isAdmin: boolean;
 }

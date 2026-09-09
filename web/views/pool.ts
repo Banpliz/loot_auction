@@ -1,7 +1,7 @@
 // web/views/pool.ts
 import { apiFetch } from '../api';
 import { escapeHtml } from '../escape-html';
-import { colorHex } from '../format';
+import { colorHex, CLASSES } from '../format';
 import { renderResults } from './results';
 
 interface Winner {
@@ -20,6 +20,7 @@ interface Item {
   winners: Winner[];
   claimedByMe: number;
   template: string;
+  class: string;
 }
 
 let countdownTimer: ReturnType<typeof setInterval> | undefined;
@@ -46,6 +47,7 @@ const CLAIM_ERROR_MESSAGES: Record<string, string> = {
   'daily purple limit reached': 'На сегодня лимит фиолетовых лотов исчерпан.',
   'already won in the other category': 'Нельзя — ты уже выиграл в другой категории.',
   'bidding has ended': 'Приём заявок уже завершён.',
+  'wrong class': 'Этот лот не для твоего класса.',
 };
 const claimErrorMessage = (message: string) => CLAIM_ERROR_MESSAGES[message] ?? message;
 
@@ -163,6 +165,7 @@ export async function renderPool(root: HTMLElement) {
         <div class="lot-row__info">
           ${item.name ? `<p class="lot-row__name">${escapeHtml(item.name)}</p>` : ''}
           ${item.quantity > 1 ? `<span class="qty-tag">×${item.quantity}</span>` : ''}
+          ${item.class ? `<span class="qty-tag">${CLASSES.find((c) => c.value === item.class)?.label ?? item.class}</span>` : ''}
         </div>
         ${
           item.status === 'auctioned'

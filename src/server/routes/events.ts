@@ -50,7 +50,7 @@ export function winLimitGroup(template: string, color: string, category: string)
   return { key: `color:${group}`, limit: COLOR_WIN_LIMITS[group] };
 }
 
-const ITEM_COLUMNS = `i.id, i.name, i.color, i.category, i.quantity, i.image_path as imagePath, i.status, s.template as template`;
+const ITEM_COLUMNS = `i.id, i.name, i.color, i.category, i.class, i.quantity, i.image_path as imagePath, i.status, s.template as template`;
 
 // Rarest-looking first: red, then purple, then blue — matches the in-game rarity
 // order, not insertion order.

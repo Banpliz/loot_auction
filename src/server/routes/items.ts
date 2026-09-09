@@ -13,6 +13,8 @@ import { INVASION_CATALOG } from '../invasion-catalog';
 
 const VALID_COLORS = new Set(['blue', 'purple', 'red']);
 const VALID_CATEGORIES = new Set(['item', 'stone']);
+// Same value set as users.class — see the claim handler below and web/format.ts's CLASSES.
+const VALID_CLASSES = new Set(['tank', 'rogue', 'mage', 'healer', 'hunter']);
 
 // A manual lot has no real screenshot to crop an icon from, so every manual lot across
 // every event shares this one generated placeholder — the admin-entered comment/color is
@@ -225,7 +227,7 @@ function getUserGroupCounts(deps: AppDeps, eventId: number, userId: number): Map
 }
 
 export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
-  app.put<{ Params: { id: string }; Body: { name?: string; color?: string; category?: string; quantity?: number } }>(
+  app.put<{ Params: { id: string }; Body: { name?: string; color?: string; category?: string; quantity?: number; class?: string } }>(
     '/items/:id',
     { preHandler: requireAdmin(deps) },
     async (request, reply) => {
@@ -236,9 +238,9 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
         return;
       }
 
-      const { name, color, category, quantity } = request.body ?? {};
-      if (name === undefined && color === undefined && category === undefined && quantity === undefined) {
-        reply.code(400).send({ error: 'at least one of name, color, category, quantity is required' });
+      const { name, color, category, quantity, class: itemClass } = request.body ?? {};
+      if (name === undefined && color === undefined && category === undefined && quantity === undefined && itemClass === undefined) {
+        reply.code(400).send({ error: 'at least one of name, color, category, quantity, class is required' });
         return;
       }
       if (color !== undefined && !VALID_COLORS.has(color)) {
@@ -251,6 +253,11 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
       }
       if (quantity !== undefined && (!Number.isInteger(quantity) || quantity < 1)) {
         reply.code(400).send({ error: 'quantity must be a positive integer' });
+        return;
+      }
+      // '' clears the restriction — see items.class's default in db.ts.
+      if (itemClass !== undefined && itemClass !== '' && !VALID_CLASSES.has(itemClass)) {
+        reply.code(400).send({ error: 'class must be tank, rogue, mage, healer, hunter, or empty' });
         return;
       }
 
@@ -272,6 +279,10 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
       if (quantity !== undefined) {
         updates.push('quantity = ?');
         values.push(quantity);
+      }
+      if (itemClass !== undefined) {
+        updates.push('class = ?');
+        values.push(itemClass);
       }
 
       values.push(itemId);
@@ -302,7 +313,7 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
     }
   );
 
-  app.post<{ Params: { id: string }; Body: { name?: string; quantity?: number; color?: string; template?: string } }>(
+  app.post<{ Params: { id: string }; Body: { name?: string; quantity?: number; color?: string; template?: string; class?: string } }>(
     '/events/:id/items/manual',
     { preHandler: requireAdmin(deps) },
     async (request, reply) => {
@@ -312,7 +323,7 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
         return;
       }
 
-      const { name, quantity, color, template = 'feast' } = request.body ?? {};
+      const { name, quantity, color, template = 'feast', class: itemClass = '' } = request.body ?? {};
       if (!color || !VALID_COLORS.has(color)) {
         reply.code(400).send({ error: 'color must be blue, purple, or red' });
         return;
@@ -325,6 +336,10 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
         reply.code(400).send({ error: 'template must be feast or invasion' });
         return;
       }
+      if (itemClass !== '' && !VALID_CLASSES.has(itemClass)) {
+        reply.code(400).send({ error: 'class must be tank, rogue, mage, healer, hunter, or empty' });
+        return;
+      }
 
       const userId = request.telegramUser!.telegramId;
       await ensureManualPlaceholderImage(deps);
@@ -332,9 +347,9 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
 
       deps.db
         .prepare(
-          "INSERT INTO items (event_id, screenshot_id, image_path, color, category, name, quantity, status) VALUES (?, ?, ?, ?, 'item', ?, ?, 'pool')"
+          "INSERT INTO items (event_id, screenshot_id, image_path, color, category, name, quantity, class, status) VALUES (?, ?, ?, ?, 'item', ?, ?, ?, 'pool')"
         )
-        .run(eventId, screenshotId, MANUAL_PLACEHOLDER_IMAGE_PATH, color, (name ?? '').trim(), quantity);
+        .run(eventId, screenshotId, MANUAL_PLACEHOLDER_IMAGE_PATH, color, (name ?? '').trim(), quantity, itemClass);
 
       publishChange();
       return { ok: true };
@@ -443,16 +458,28 @@ export function registerItemRoutes(app: FastifyInstance, deps: AppDeps) {
 
     const item = deps.db
       .prepare(
-        `SELECT i.status, i.event_id, i.quantity, i.color, i.category, s.template
+        `SELECT i.status, i.event_id, i.quantity, i.color, i.category, i.class, s.template
          FROM items i JOIN screenshots s ON s.id = i.screenshot_id
          WHERE i.id = ?`
       )
       .get(itemId) as
-      | { status: string; event_id: number; quantity: number; color: string; category: string; template: string }
+      | { status: string; event_id: number; quantity: number; color: string; category: string; class: string; template: string }
       | undefined;
     if (!item || item.status !== 'pool') {
       reply.code(409).send({ error: 'item is not claimable' });
       return;
+    }
+
+    // A class-restricted lot is a hard eligibility rule, not a fairness quota like the
+    // win limits below — the wrong class shouldn't even be able to enter, regardless of
+    // template. A participant with no class set yet can't be verified as eligible, so
+    // they're blocked the same as a genuine mismatch.
+    if (item.class) {
+      const claimant = deps.db.prepare('SELECT class FROM users WHERE telegram_id = ?').get(userId) as { class: string } | undefined;
+      if (claimant?.class !== item.class) {
+        reply.code(409).send({ error: 'wrong class' });
+        return;
+      }
     }
 
     // Invasion still reserves stock instantly, up to the win-limit rules below (including

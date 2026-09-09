@@ -102,6 +102,36 @@ describe('items routes', () => {
     expect(invalid.statusCode).toBe(400);
   });
 
+  it('PUT /items/:id sets a class restriction and rejects an invalid one', async () => {
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/api/items/${itemAId}`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { class: 'tank' },
+    });
+    expect(res.statusCode).toBe(200);
+    const row = db.prepare('SELECT class FROM items WHERE id = ?').get(itemAId) as any;
+    expect(row.class).toBe('tank');
+
+    const invalid = await app.inject({
+      method: 'PUT',
+      url: `/api/items/${itemAId}`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { class: 'paladin' },
+    });
+    expect(invalid.statusCode).toBe(400);
+
+    const cleared = await app.inject({
+      method: 'PUT',
+      url: `/api/items/${itemAId}`,
+      headers: { 'x-telegram-init-data': adminInitData, 'content-type': 'application/json' },
+      payload: { class: '' },
+    });
+    expect(cleared.statusCode).toBe(200);
+    const clearedRow = db.prepare('SELECT class FROM items WHERE id = ?').get(itemAId) as any;
+    expect(clearedRow.class).toBe('');
+  });
+
   it('DELETE /items/:id soft-removes the item', async () => {
     await app.inject({ method: 'DELETE', url: `/api/items/${itemAId}`, headers: { 'x-telegram-init-data': adminInitData } });
     const row = db.prepare('SELECT status FROM items WHERE id = ?').get(itemAId) as any;
@@ -217,6 +247,64 @@ describe('items routes', () => {
     expect(first.statusCode).toBe(200);
     const second = await app.inject({ method: 'POST', url: `/api/items/${itemBId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
     expect(second.statusCode).toBe(200);
+  });
+
+  describe('class restriction', () => {
+    it('rejects a claim when the lot is restricted to a different class', async () => {
+      db.prepare("UPDATE events SET status = 'open' WHERE id = ?").run(eventId);
+      db.prepare("UPDATE items SET class = 'tank' WHERE id = ?").run(itemAId);
+      db.prepare("UPDATE users SET class = 'rogue' WHERE telegram_id = 2").run();
+
+      const res = await app.inject({ method: 'POST', url: `/api/items/${itemAId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe('wrong class');
+      const claimCount = db.prepare('SELECT COUNT(*) as n FROM claims WHERE item_id = ?').get(itemAId) as any;
+      expect(claimCount.n).toBe(0);
+    });
+
+    it('rejects a claim on a class-restricted lot when the claimant has no class set at all', async () => {
+      db.prepare("UPDATE events SET status = 'open' WHERE id = ?").run(eventId);
+      db.prepare("UPDATE items SET class = 'tank' WHERE id = ?").run(itemAId);
+
+      const res = await app.inject({ method: 'POST', url: `/api/items/${itemAId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe('wrong class');
+    });
+
+    it('allows a claim when the claimant class matches the lot class', async () => {
+      db.prepare("UPDATE events SET status = 'open' WHERE id = ?").run(eventId);
+      db.prepare("UPDATE items SET class = 'tank' WHERE id = ?").run(itemAId);
+      db.prepare("UPDATE users SET class = 'tank' WHERE telegram_id = 2").run();
+
+      const res = await app.inject({ method: 'POST', url: `/api/items/${itemAId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
+      expect(res.statusCode).toBe(200);
+    });
+
+    it('an unrestricted lot (no class set) can be claimed by anyone, including someone with no class', async () => {
+      db.prepare("UPDATE events SET status = 'open' WHERE id = ?").run(eventId);
+
+      const res = await app.inject({ method: 'POST', url: `/api/items/${itemAId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
+      expect(res.statusCode).toBe(200);
+    });
+
+    it('the class check applies to invasion lots too, before the invasion win-limit checks', async () => {
+      const invasionEventId = db
+        .prepare("INSERT INTO events (title, status) VALUES ('Вторжение', 'open')")
+        .run().lastInsertRowid as number;
+      const screenshotId = db
+        .prepare("INSERT INTO screenshots (event_id, original_path, rows, template, uploaded_by) VALUES (?, ?, 1, 'invasion', 1)")
+        .run(invasionEventId, '/tmp/inv-class.png').lastInsertRowid as number;
+      const blueId = db
+        .prepare(
+          "INSERT INTO items (event_id, screenshot_id, name, image_path, status, color, class, quantity) VALUES (?, ?, 'Blue', 'items/x.png', 'pool', 'blue', 'mage', 2)"
+        )
+        .run(invasionEventId, screenshotId).lastInsertRowid as number;
+      db.prepare("UPDATE users SET class = 'hunter' WHERE telegram_id = 2").run();
+
+      const res = await app.inject({ method: 'POST', url: `/api/items/${blueId}/claim`, headers: { 'x-telegram-init-data': aliceInitData } });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe('wrong class');
+    });
   });
 
   it('respects per-color win limits for invasion at claim time (red 1/event, blue 2/event, independent of each other)', async () => {

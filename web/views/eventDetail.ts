@@ -2,7 +2,7 @@
 import { apiFetch } from '../api';
 import { getTelegramWebApp } from '../telegram';
 import { escapeHtml } from '../escape-html';
-import { ITEM_COLORS, ITEM_CATEGORIES, colorHex } from '../format';
+import { ITEM_COLORS, ITEM_CATEGORIES, CLASSES, colorHex } from '../format';
 
 interface Winner {
   telegramId: number;
@@ -17,6 +17,7 @@ interface AdminItem {
   name: string;
   color: string;
   category: string;
+  class: string;
   quantity: number;
   imagePath: string;
   status: 'pool' | 'auctioned' | 'removed';
@@ -113,6 +114,10 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
           <select id="manual-lot-color">
             ${ITEM_COLORS.map((c) => `<option value="${c.value}">${c.label}</option>`).join('')}
           </select>
+          <select id="manual-lot-class" title="Кто может заявиться на этот лот">
+            <option value="">Любой класс</option>
+            ${CLASSES.map((c) => `<option value="${c.value}">${c.label}</option>`).join('')}
+          </select>
         </div>
         <button type="submit" class="btn-block btn-sm">Добавить</button>
       </form>
@@ -185,6 +190,10 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
               ).join('')}
             </select>
           </div>
+          <select data-role="class" title="Кто может заявиться на этот лот">
+            <option value="" ${item.class === '' ? 'selected' : ''}>Любой класс</option>
+            ${CLASSES.map((c) => `<option value="${c.value}" ${item.class === c.value ? 'selected' : ''}>${c.label}</option>`).join('')}
+          </select>
           <span class="status-pill">${STATUS_LABEL[item.status]}${
             item.winners.length > 0 ? ' · ' + item.winners.map(winnerLabel).join(', ') : ''
           }</span>
@@ -203,12 +212,13 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
         const name = (itemEl.querySelector('[data-role="name"]') as HTMLInputElement).value;
         const color = (itemEl.querySelector('[data-role="color"]') as HTMLSelectElement).value;
         const category = (itemEl.querySelector('[data-role="category"]') as HTMLSelectElement).value;
+        const itemClass = (itemEl.querySelector('[data-role="class"]') as HTMLSelectElement).value;
         const quantity = Number((itemEl.querySelector('[data-role="quantity"]') as HTMLInputElement).value) || 1;
         try {
           await apiFetch(`/items/${itemEl.dataset.id}`, {
             method: 'PUT',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ name, color, category, quantity }),
+            body: JSON.stringify({ name, color, category, quantity, class: itemClass }),
           });
         } catch (err) {
           (root.querySelector('#upload-error') as HTMLElement).textContent = (err as Error).message;
@@ -281,12 +291,13 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
       .map((item) => {
         const colorLabel = ITEM_COLORS.find((c) => c.value === item.color)?.label ?? item.color;
         const categoryLabel = ITEM_CATEGORIES.find((c) => c.value === item.category)?.label ?? item.category;
+        const classLabel = CLASSES.find((c) => c.value === item.class)?.label;
         return `
         <div class="admin-item" data-id="${item.id}">
           <img src="/uploads/${item.imagePath}" />
           <p>${escapeHtml(item.name) || '—'}</p>
           <span class="status-pill">
-            ${colorLabel} · ${categoryLabel} · Осталось ${item.quantity} · ${STATUS_LABEL[item.status]}
+            ${colorLabel} · ${categoryLabel}${classLabel ? ' · ' + classLabel : ''} · Осталось ${item.quantity} · ${STATUS_LABEL[item.status]}
             ${item.winners.length > 0 ? ' · ' + item.winners.map((w) => winnerEntry(item, w)).join(', ') : ''}
           </span>
         </div>`;
@@ -427,11 +438,12 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
       const name = (root.querySelector('#manual-lot-name') as HTMLInputElement).value;
       const quantity = Number((root.querySelector('#manual-lot-quantity') as HTMLInputElement).value);
       const color = (root.querySelector('#manual-lot-color') as HTMLSelectElement).value;
+      const itemClass = (root.querySelector('#manual-lot-class') as HTMLSelectElement).value;
       try {
         await apiFetch(`/events/${eventId}/items/manual`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ name, quantity, color }),
+          body: JSON.stringify({ name, quantity, color, class: itemClass }),
         });
         manualForm.reset();
         manualForm.style.display = 'none';

@@ -1,6 +1,7 @@
 // web/views/participants.ts
 import { apiFetch } from '../api';
 import { escapeHtml } from '../escape-html';
+import { CLASSES } from '../format';
 
 interface Participant {
   telegramId: number;
@@ -8,6 +9,7 @@ interface Participant {
   gameNickname: string | null;
   status: 'pending' | 'approved' | 'banned';
   rank: 'member' | 'officer';
+  class: string;
 }
 
 const whoLabel = (p: Participant) =>
@@ -53,6 +55,10 @@ export async function renderParticipants(root: HTMLElement) {
               <div class="admin-item" data-id="${p.telegramId}">
                 <p>${whoLabel(p)}</p>
                 <div class="admin-item-actions">
+                  <select data-action="class">
+                    <option value="">Класс не назначен</option>
+                    ${CLASSES.map((c) => `<option value="${c.value}" ${p.class === c.value ? 'selected' : ''}>${c.label}</option>`).join('')}
+                  </select>
                   ${
                     p.rank === 'officer'
                       ? `<button class="btn-secondary btn-sm" data-action="rank" data-rank="member">Разжаловать</button>`
@@ -86,7 +92,23 @@ export async function renderParticipants(root: HTMLElement) {
       <p id="participants-error" class="error"></p>
     `;
 
-    root.querySelectorAll('[data-action]').forEach((button) => {
+    root.querySelectorAll('select[data-action="class"]').forEach((select) => {
+      select.addEventListener('change', async () => {
+        const telegramId = (select.closest('.admin-item') as HTMLElement).dataset.id;
+        const value = (select as HTMLSelectElement).value;
+        try {
+          await apiFetch(`/participants/${telegramId}/class`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ class: value }),
+          });
+        } catch (err) {
+          (root.querySelector('#participants-error') as HTMLElement).textContent = (err as Error).message;
+        }
+      });
+    });
+
+    root.querySelectorAll('button[data-action]').forEach((button) => {
       button.addEventListener('click', async () => {
         const telegramId = (button.closest('.admin-item') as HTMLElement).dataset.id;
         const action = button.getAttribute('data-action');

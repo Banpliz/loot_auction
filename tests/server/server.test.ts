@@ -53,7 +53,7 @@ describe('buildServer auth', () => {
       method: 'PUT',
       url: '/api/me',
       headers: { 'x-telegram-init-data': initData, 'content-type': 'application/json' },
-      payload: { gameNickname: 'Bob' },
+      payload: { gameNickname: 'Bob', class: 'hunter' },
     });
     expect(res.statusCode).toBe(200);
   });

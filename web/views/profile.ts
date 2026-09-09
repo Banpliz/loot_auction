@@ -1,12 +1,19 @@
 // web/views/profile.ts
 import { apiFetch } from '../api';
 import { escapeHtml } from '../escape-html';
+import { CLASSES } from '../format';
 
-export function renderProfilePrompt(root: HTMLElement, me: { gameNickname: string | null }, onSaved: () => void) {
+export function renderProfilePrompt(root: HTMLElement, me: { gameNickname: string | null; class?: string }, onSaved: () => void) {
   root.innerHTML = `
     <form id="profile-form">
       <label>Твой игровой ник:
         <input name="gameNickname" required value="${escapeHtml(me.gameNickname ?? '')}" />
+      </label>
+      <label>Твой класс:
+        <select name="class" required>
+          <option value="" disabled ${me.class ? '' : 'selected'}>Выбери класс…</option>
+          ${CLASSES.map((c) => `<option value="${c.value}" ${me.class === c.value ? 'selected' : ''}>${c.label}</option>`).join('')}
+        </select>
       </label>
       <button type="submit">Сохранить</button>
       <p id="profile-error" class="error"></p>
@@ -16,12 +23,14 @@ export function renderProfilePrompt(root: HTMLElement, me: { gameNickname: strin
   const form = root.querySelector('#profile-form') as HTMLFormElement;
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const gameNickname = (new FormData(form).get('gameNickname') as string).trim();
+    const data = new FormData(form);
+    const gameNickname = (data.get('gameNickname') as string).trim();
+    const gameClass = data.get('class') as string;
     try {
       await apiFetch('/me', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ gameNickname }),
+        body: JSON.stringify({ gameNickname, class: gameClass }),
       });
       onSaved();
     } catch (err) {

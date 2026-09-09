@@ -37,14 +37,32 @@ describe('users routes', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('PUT /me saves the nickname and GET /me reflects it', async () => {
+  it('PUT /me saves the nickname and class, GET /me reflects both', async () => {
     await app.inject({
+      method: 'PUT',
+      url: '/api/me',
+      headers: { 'x-telegram-init-data': initData, 'content-type': 'application/json' },
+      payload: { gameNickname: 'Дракоша', class: 'mage' },
+    });
+    const res = await app.inject({ method: 'GET', url: '/api/me', headers: { 'x-telegram-init-data': initData } });
+    expect(res.json()).toMatchObject({ gameNickname: 'Дракоша', class: 'mage' });
+  });
+
+  it('PUT /me rejects a missing or invalid class', async () => {
+    const missing = await app.inject({
       method: 'PUT',
       url: '/api/me',
       headers: { 'x-telegram-init-data': initData, 'content-type': 'application/json' },
       payload: { gameNickname: 'Дракоша' },
     });
-    const res = await app.inject({ method: 'GET', url: '/api/me', headers: { 'x-telegram-init-data': initData } });
-    expect(res.json().gameNickname).toBe('Дракоша');
+    expect(missing.statusCode).toBe(400);
+
+    const invalid = await app.inject({
+      method: 'PUT',
+      url: '/api/me',
+      headers: { 'x-telegram-init-data': initData, 'content-type': 'application/json' },
+      payload: { gameNickname: 'Дракоша', class: 'paladin' },
+    });
+    expect(invalid.statusCode).toBe(400);
   });
 });

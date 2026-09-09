@@ -151,4 +151,16 @@ function migrate(db: Db) {
   if (!userColumns.some((c) => c.name === 'rank')) {
     db.exec(`ALTER TABLE users ADD COLUMN rank TEXT NOT NULL DEFAULT 'member'`);
   }
+
+  // Additive columns: game class ('' = not set/no restriction). users.class is set by an
+  // admin in "Заявки"; items.class is set by an admin per lot. A claim on a lot with a
+  // class set is rejected outright when the claimant's class doesn't match — see
+  // items.ts's claim handler. Empty string, not NULL, so both sides compare equal without
+  // NULL-handling in that check.
+  if (!userColumns.some((c) => c.name === 'class')) {
+    db.exec(`ALTER TABLE users ADD COLUMN class TEXT NOT NULL DEFAULT ''`);
+  }
+  if (!itemColumns.some((c) => c.name === 'class')) {
+    db.exec(`ALTER TABLE items ADD COLUMN class TEXT NOT NULL DEFAULT ''`);
+  }
 }

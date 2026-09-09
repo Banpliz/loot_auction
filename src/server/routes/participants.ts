@@ -3,18 +3,37 @@ import type { AppDeps } from '../types';
 import { requireAdmin } from '../auth';
 import { cancelClaim } from './items';
 
+// Same value set as items.class — see items.ts's claim handler and web/format.ts's CLASSES.
+const VALID_CLASSES = new Set(['tank', 'rogue', 'mage', 'healer', 'hunter']);
+
 export function registerParticipantRoutes(app: FastifyInstance, deps: AppDeps) {
   app.get('/participants', { preHandler: requireAdmin(deps) }, async () => {
     const rows = deps.db
       .prepare(
-        `SELECT telegram_id as telegramId, username, game_nickname as gameNickname, status, rank
+        `SELECT telegram_id as telegramId, username, game_nickname as gameNickname, status, rank, class
          FROM users
          ORDER BY created_at DESC`
       )
-      .all() as { telegramId: number; username: string | null; gameNickname: string | null; status: string; rank: string }[];
+      .all() as { telegramId: number; username: string | null; gameNickname: string | null; status: string; rank: string; class: string }[];
 
     return { participants: rows.filter((r) => !deps.adminTelegramIds.includes(r.telegramId)) };
   });
+
+  // '' clears the class back to "not set" — see users.class's default in db.ts.
+  app.post<{ Params: { telegramId: string }; Body: { class?: string } }>(
+    '/participants/:telegramId/class',
+    { preHandler: requireAdmin(deps) },
+    async (request, reply) => {
+      const telegramId = Number(request.params.telegramId);
+      const participantClass = request.body?.class ?? '';
+      if (participantClass !== '' && !VALID_CLASSES.has(participantClass)) {
+        reply.code(400).send({ error: 'class must be tank, rogue, mage, healer, hunter, or empty' });
+        return;
+      }
+      deps.db.prepare('UPDATE users SET class = ? WHERE telegram_id = ?').run(participantClass, telegramId);
+      return { ok: true };
+    }
+  );
 
   // Officer rank gates the daily invasion-purple claim limit (see items.ts's
   // isOfficerRank) — otherwise carries no other permission in the app.
