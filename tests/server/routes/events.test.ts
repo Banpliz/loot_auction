@@ -729,7 +729,7 @@ describe('events routes', () => {
       const res = await app.inject({ method: 'GET', url: `/api/events/${eventId}/results`, headers: { 'x-telegram-init-data': memberInitData } });
       expect(res.statusCode).toBe(200);
       const results = res.json().results as { nickname: string | null; won: { name: string }[] }[];
-      expect(results.map((r) => r.nickname)).toEqual(['Bob', 'Carol']);
+      expect(results.map((r) => r.nickname).sort()).toEqual(['Bob', 'Carol']);
 
       const winner = results.find((r) => r.won.length > 0)!;
       const loser = results.find((r) => r.won.length === 0)!;

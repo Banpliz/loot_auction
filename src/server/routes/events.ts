@@ -375,9 +375,9 @@ export function registerEventRoutes(app: FastifyInstance, deps: AppDeps) {
       wonByPerson.set(row.telegramId, list);
     }
 
-    const results = participants
-      .map((p) => ({ telegramId: p.telegramId, nickname: p.nickname, won: wonByPerson.get(p.telegramId) ?? [] }))
-      .sort((a, b) => (a.nickname ?? '').localeCompare(b.nickname ?? '', 'ru'));
+    // Shuffled rather than alphabetical (2026-09-10, by request) — a fresh random order
+    // on every fetch, not just once per draw, so nobody's position here is meaningful.
+    const results = shuffle(participants.map((p) => ({ telegramId: p.telegramId, nickname: p.nickname, won: wonByPerson.get(p.telegramId) ?? [] })));
 
     return { results };
   });
