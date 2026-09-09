@@ -22,7 +22,15 @@ interface AdminItem {
   imagePath: string;
   status: 'pool' | 'auctioned' | 'removed';
   winners: Winner[];
+  template: string;
 }
+
+// Invasion's quantity is live decrementing stock (already right as "remaining"). Feast's
+// quantity is the lot's fixed total size — the raffle draw never touches it — so
+// "remaining" there has to be computed by subtracting what the draw actually handed out
+// (see pool.ts's identical totalWon/isOccupied reasoning).
+const remainingQuantity = (item: AdminItem) =>
+  item.template === 'invasion' ? item.quantity : item.quantity - item.winners.reduce((sum, w) => sum + w.quantity, 0);
 
 const STATUS_LABEL: Record<string, string> = { pool: 'В пуле', auctioned: 'Раскуплено', removed: 'Убран' };
 const EVENT_STATUS_LABEL: Record<string, string> = { draft: 'Черновик', open: 'Открыт', resolved: 'Завершён' };
@@ -297,7 +305,7 @@ export async function renderEventDetail(root: HTMLElement, eventId: number, onBa
           <img src="/uploads/${item.imagePath}" />
           <p>${escapeHtml(item.name) || '—'}</p>
           <span class="status-pill">
-            ${colorLabel} · ${categoryLabel}${classLabel ? ' · ' + classLabel : ''} · Осталось ${item.quantity} · ${STATUS_LABEL[item.status]}
+            ${colorLabel} · ${categoryLabel}${classLabel ? ' · ' + classLabel : ''} · Осталось ${remainingQuantity(item)} · ${STATUS_LABEL[item.status]}
             ${item.winners.length > 0 ? ' · ' + item.winners.map((w) => winnerEntry(item, w)).join(', ') : ''}
           </span>
         </div>`;

@@ -15,7 +15,7 @@ export function colorHex(color: string | null | undefined): string {
 export const ITEM_CATEGORIES: { value: string; label: string }[] = [
   { value: 'item', label: 'Предмет' },
   { value: 'stone_temper', label: 'Закалка' },
-  { value: 'stone_remelt', label: 'Переплавка' },
+  { value: 'stone_remelt', label: 'Улучш.' },
 ];
 
 // Same value set for both a participant's class (users.class) and a lot's class

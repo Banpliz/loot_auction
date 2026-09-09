@@ -134,26 +134,80 @@ function drawWinners(deps: AppDeps, eventId: number): void {
        WHERE i.event_id = ? AND i.status = 'pool' AND s.template != 'invasion'`
     )
     .all(eventId) as { id: number; color: string; category: string; quantity: number; template: string }[];
+  const temperItems = poolItems.filter((i) => categoryGroup(i.category) === 'stone_temper');
 
   const groupCounts = new Map<number, Map<string, number>>();
+  const remainingByItem = new Map<number, number>(poolItems.map((i) => [i.id, i.quantity]));
+  const wonItemsByPerson = new Map<number, Set<number>>();
   const insertWinner = deps.db.prepare('INSERT INTO item_winners (item_id, telegram_id) VALUES (?, ?)');
 
+  const claimantsCache = new Map<number, { telegram_id: number }[]>();
+  const claimantsFor = (itemId: number) => {
+    if (!claimantsCache.has(itemId)) {
+      claimantsCache.set(itemId, deps.db.prepare('SELECT telegram_id FROM claims WHERE item_id = ?').all(itemId) as { telegram_id: number }[]);
+    }
+    return claimantsCache.get(itemId)!;
+  };
+
+  function award(itemId: number, telegramId: number, key: string): void {
+    insertWinner.run(itemId, telegramId);
+    remainingByItem.set(itemId, remainingByItem.get(itemId)! - 1);
+    const counts = groupCounts.get(telegramId) ?? new Map<string, number>();
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+    groupCounts.set(telegramId, counts);
+    const won = wonItemsByPerson.get(telegramId) ?? new Set<number>();
+    won.add(itemId);
+    wonItemsByPerson.set(telegramId, won);
+  }
+
+  // Reward bundle (alliance rule, 2026-09-09): winning a remelt stone comes packaged with
+  // up to 2 temper stones in the real game, but only for someone who was actually after
+  // both — i.e. who placed a claim on at least one temper lot too, not just the remelt
+  // one. Runs as a SEPARATE pass after every lot's own fair random draw below has already
+  // finished (not inline as each remelt winner is picked) — someone who only bid on a
+  // temper lot, never on remelt, still gets an equal random shot at it there, same as
+  // anyone else. The bundle only ever mops up whatever's left over on temper lots THIS
+  // PERSON claimed once that fair draw is done (never any lot they didn't personally
+  // claim) — and by construction, stock only survives the fair draw on a lot someone
+  // claimed if that person had already hit their own temper cap (otherwise the fair draw
+  // would have simply given it to them). So this deliberately does NOT re-check the
+  // per-person temper cap: gating the bonus by the same cap that created the leftover
+  // would make it a no-op in practice. It never takes a unit that would otherwise have
+  // gone to a different, still-eligible claimant — only true leftovers.
+  function grantTemperBundle(telegramId: number): void {
+    const claimedTemperItems = temperItems.filter((t) => claimantsFor(t.id).some((c) => c.telegram_id === telegramId));
+    if (claimedTemperItems.length === 0) return;
+
+    const temperKey = 'cat:stone_temper';
+    let toGrant = 2;
+    const won = wonItemsByPerson.get(telegramId) ?? new Set<number>();
+    const eligible = shuffle(claimedTemperItems.filter((t) => remainingByItem.get(t.id)! > 0 && !won.has(t.id)));
+    for (const t of eligible) {
+      if (toGrant <= 0) break;
+      award(t.id, telegramId, temperKey);
+      toGrant -= 1;
+    }
+  }
+
+  const remeltWinners: number[] = [];
   for (const item of shuffle(poolItems)) {
-    const claimants = deps.db.prepare('SELECT telegram_id FROM claims WHERE item_id = ?').all(item.id) as { telegram_id: number }[];
     const { key, limit, exclusiveWith } = winLimitGroup(item.template, item.color, item.category);
 
-    let remaining = item.quantity;
-    for (const claimant of shuffle(claimants)) {
-      if (remaining <= 0) break;
+    for (const claimant of shuffle(claimantsFor(item.id))) {
+      if (remainingByItem.get(item.id)! <= 0) break;
       const counts = groupCounts.get(claimant.telegram_id) ?? new Map<string, number>();
       if ((counts.get(key) ?? 0) >= limit) continue;
       if (exclusiveWith?.some((other) => (counts.get(other) ?? 0) > 0)) continue;
 
-      insertWinner.run(item.id, claimant.telegram_id);
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-      groupCounts.set(claimant.telegram_id, counts);
-      remaining -= 1;
+      award(item.id, claimant.telegram_id, key);
+      if (categoryGroup(item.category) === 'stone_remelt') {
+        remeltWinners.push(claimant.telegram_id);
+      }
     }
+  }
+
+  for (const telegramId of remeltWinners) {
+    grantTemperBundle(telegramId);
   }
 }
 

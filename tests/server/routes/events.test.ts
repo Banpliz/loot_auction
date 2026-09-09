@@ -631,6 +631,76 @@ describe('events routes', () => {
 
       expect(db.prepare('SELECT COUNT(*) as n FROM item_winners WHERE item_id = ?').get(itemId)).toMatchObject({ n: 0 });
     });
+
+    describe('remelt-stone bundle: winning a remelt lot also wins temper stones the same person claimed', () => {
+      it('grants up to 2 temper stones from lots the remelt winner also claimed', async () => {
+        const screenshotId = db
+          .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
+          .run(eventId, '/tmp/o.png').lastInsertRowid as number;
+        const insertItem = db.prepare(
+          "INSERT INTO items (event_id, screenshot_id, name, image_path, status, category) VALUES (?, ?, ?, 'items/x.png', 'pool', ?)"
+        );
+        const remeltId = insertItem.run(eventId, screenshotId, 'Улучшение', 'stone_remelt').lastInsertRowid as number;
+        const temperAId = insertItem.run(eventId, screenshotId, 'Закалка А', 'stone_temper').lastInsertRowid as number;
+        const temperBId = insertItem.run(eventId, screenshotId, 'Закалка Б', 'stone_temper').lastInsertRowid as number;
+
+        // Bob is the sole claimant everywhere, so the draw itself can't be what hands him
+        // all three — only the bundle rule explains winning both temper lots too.
+        for (const itemId of [remeltId, temperAId, temperBId]) {
+          await app.inject({ method: 'POST', url: `/api/items/${itemId}/claim`, headers: { 'x-telegram-init-data': memberInitData } });
+        }
+        await app.inject({ method: 'POST', url: `/api/events/${eventId}/finish`, headers: { 'x-telegram-init-data': adminInitData } });
+
+        const bobWins = db.prepare('SELECT item_id FROM item_winners WHERE telegram_id = 2').all() as { item_id: number }[];
+        expect(bobWins.map((w) => w.item_id).sort()).toEqual([remeltId, temperAId, temperBId].sort());
+      });
+
+      it("doesn't grant the bundle to someone who didn't claim any temper lot, and leaves that temper lot for its own claimant", async () => {
+        const screenshotId = db
+          .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
+          .run(eventId, '/tmp/o.png').lastInsertRowid as number;
+        const insertItem = db.prepare(
+          "INSERT INTO items (event_id, screenshot_id, name, image_path, status, category) VALUES (?, ?, ?, 'items/x.png', 'pool', ?)"
+        );
+        const remeltId = insertItem.run(eventId, screenshotId, 'Улучшение', 'stone_remelt').lastInsertRowid as number;
+        const temperId = insertItem.run(eventId, screenshotId, 'Закалка', 'stone_temper').lastInsertRowid as number;
+
+        // Bob only wants the remelt stone; Carol only wants the temper one.
+        await app.inject({ method: 'POST', url: `/api/items/${remeltId}/claim`, headers: { 'x-telegram-init-data': memberInitData } });
+        await app.inject({ method: 'POST', url: `/api/items/${temperId}/claim`, headers: { 'x-telegram-init-data': carolInitData } });
+        await app.inject({ method: 'POST', url: `/api/events/${eventId}/finish`, headers: { 'x-telegram-init-data': adminInitData } });
+
+        const bobWins = db.prepare('SELECT item_id FROM item_winners WHERE telegram_id = 2').all() as { item_id: number }[];
+        expect(bobWins.map((w) => w.item_id)).toEqual([remeltId]); // no bonus — he never claimed temper
+
+        const carolWins = db.prepare('SELECT item_id FROM item_winners WHERE telegram_id = 3').all() as { item_id: number }[];
+        expect(carolWins.map((w) => w.item_id)).toEqual([temperId]); // untouched by Bob's bundle
+      });
+
+      it('the bonus can push a person past the normal temper cap (3), but only by picking up their own leftover, never anyone else\'s', async () => {
+        const screenshotId = db
+          .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
+          .run(eventId, '/tmp/o.png').lastInsertRowid as number;
+        const insertItem = db.prepare(
+          "INSERT INTO items (event_id, screenshot_id, name, image_path, status, category) VALUES (?, ?, ?, 'items/x.png', 'pool', ?)"
+        );
+        const remeltId = insertItem.run(eventId, screenshotId, 'Улучшение', 'stone_remelt').lastInsertRowid as number;
+        const temperIds = ['А', 'Б', 'В', 'Г'].map((label) => insertItem.run(eventId, screenshotId, `Закалка ${label}`, 'stone_temper').lastInsertRowid as number);
+
+        // Bob is the sole claimant on the remelt lot and all four (quantity-1) temper
+        // lots. The fair draw alone caps him at 3 of the 4 temper lots — the 4th has
+        // nobody else to give it to, so it's genuine leftover, not taken from anyone.
+        // The bundle then picks that 4th one up too: 4 temper total, one more than the
+        // normal cap, entirely from his own otherwise-unclaimed leftover.
+        for (const itemId of [remeltId, ...temperIds]) {
+          await app.inject({ method: 'POST', url: `/api/items/${itemId}/claim`, headers: { 'x-telegram-init-data': memberInitData } });
+        }
+        await app.inject({ method: 'POST', url: `/api/events/${eventId}/finish`, headers: { 'x-telegram-init-data': adminInitData } });
+
+        const bobWins = db.prepare('SELECT item_id FROM item_winners WHERE telegram_id = 2').all() as { item_id: number }[];
+        expect(bobWins.map((w) => w.item_id).sort()).toEqual([remeltId, ...temperIds].sort());
+      });
+    });
   });
 
   describe('GET /events/:id/results', () => {
