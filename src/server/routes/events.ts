@@ -134,7 +134,9 @@ function drawWinners(deps: AppDeps, eventId: number): void {
        WHERE i.event_id = ? AND i.status = 'pool' AND s.template != 'invasion'`
     )
     .all(eventId) as { id: number; color: string; category: string; quantity: number; template: string }[];
-  const temperItems = poolItems.filter((i) => categoryGroup(i.category) === 'stone_temper');
+  const gearItems = poolItems.filter((i) => categoryGroup(i.category) === 'item');
+  const stoneItems = poolItems.filter((i) => categoryGroup(i.category) !== 'item');
+  const temperItems = stoneItems.filter((i) => categoryGroup(i.category) === 'stone_temper');
 
   const groupCounts = new Map<number, Map<string, number>>();
   const remainingByItem = new Map<number, number>(poolItems.map((i) => [i.id, i.quantity]));
@@ -189,25 +191,78 @@ function drawWinners(deps: AppDeps, eventId: number): void {
     }
   }
 
+  // Draws one category's lots in random order with random claimant order per lot —
+  // shared by both phases below. `onWin` lets the gear/stone split above still track
+  // which people won a remelt lot without a third pass over everything.
   const remeltWinners: number[] = [];
-  for (const item of shuffle(poolItems)) {
-    const { key, limit, exclusiveWith } = winLimitGroup(item.template, item.color, item.category);
+  function drawGroup(items: typeof poolItems, onWin?: (itemId: number, telegramId: number, category: string) => void): void {
+    for (const item of shuffle(items)) {
+      const { key, limit, exclusiveWith } = winLimitGroup(item.template, item.color, item.category);
 
-    for (const claimant of shuffle(claimantsFor(item.id))) {
-      if (remainingByItem.get(item.id)! <= 0) break;
-      const counts = groupCounts.get(claimant.telegram_id) ?? new Map<string, number>();
-      if ((counts.get(key) ?? 0) >= limit) continue;
-      if (exclusiveWith?.some((other) => (counts.get(other) ?? 0) > 0)) continue;
+      for (const claimant of shuffle(claimantsFor(item.id))) {
+        if (remainingByItem.get(item.id)! <= 0) break;
+        const counts = groupCounts.get(claimant.telegram_id) ?? new Map<string, number>();
+        if ((counts.get(key) ?? 0) >= limit) continue;
+        if (exclusiveWith?.some((other) => (counts.get(other) ?? 0) > 0)) continue;
 
-      award(item.id, claimant.telegram_id, key);
-      if (categoryGroup(item.category) === 'stone_remelt') {
-        remeltWinners.push(claimant.telegram_id);
+        award(item.id, claimant.telegram_id, key);
+        onWin?.(item.id, claimant.telegram_id, item.category);
       }
     }
   }
 
+  // Gear first (alliance request, 2026-09-10): with gear and stones mutually exclusive,
+  // whichever category got drawn first used to decide who was locked out of the other —
+  // a person could lose a gear piece they wanted just because one of their stone lots
+  // happened to shuffle earlier. Resolving every gear lot completely before touching any
+  // stone lot means a person is only ever excluded from stones by a gear win they
+  // actually got, never the other way around.
+  drawGroup(gearItems);
+  drawGroup(stoneItems, (_itemId, telegramId, category) => {
+    if (categoryGroup(category) === 'stone_remelt') remeltWinners.push(telegramId);
+  });
+
   for (const telegramId of remeltWinners) {
     grantTemperBundle(telegramId);
+  }
+
+  grantEmptyHandedGuarantee();
+
+  // Last resort (alliance request, 2026-09-10): stone lots that stayed free after
+  // everything above — nobody eligible left to claim them, or nobody claimed them at all
+  // — go to whoever walked away with literally nothing (no gear, no stone, not even the
+  // bundle) despite having claimed on *some* stone lot themselves, so real stock doesn't
+  // sit unused while someone gets nothing. Round-robins 1 unit at a time across every
+  // still-empty-handed person (not just from lots they personally claimed — this is a
+  // pool-wide backstop, unlike the remelt bundle above) up to 3 each, capped by whatever
+  // stock genuinely remains. Deliberately not gated by the normal per-category caps —
+  // same reasoning as the bundle: those caps don't apply to a backstop for people the
+  // normal caps and draws already left with zero.
+  function grantEmptyHandedGuarantee(): void {
+    const stoneClaimants = new Set<number>();
+    for (const item of stoneItems) {
+      for (const c of claimantsFor(item.id)) stoneClaimants.add(c.telegram_id);
+    }
+    const eligible = shuffle([...stoneClaimants].filter((id) => !wonItemsByPerson.has(id)));
+    if (eligible.length === 0) return;
+
+    const availableStoneItems = shuffle(stoneItems);
+    const GUARANTEE_CAP = 3;
+    const grantedSoFar = new Map<number, number>(eligible.map((id) => [id, 0]));
+
+    let progressed = true;
+    while (progressed) {
+      progressed = false;
+      for (const telegramId of eligible) {
+        if (grantedSoFar.get(telegramId)! >= GUARANTEE_CAP) continue;
+        const won = wonItemsByPerson.get(telegramId) ?? new Set<number>();
+        const pick = availableStoneItems.find((it) => remainingByItem.get(it.id)! > 0 && !won.has(it.id));
+        if (!pick) continue;
+        award(pick.id, telegramId, categoryGroup(pick.category) === 'stone_temper' ? 'cat:stone_temper' : 'cat:stone_remelt');
+        grantedSoFar.set(telegramId, grantedSoFar.get(telegramId)! + 1);
+        progressed = true;
+      }
+    }
   }
 }
 

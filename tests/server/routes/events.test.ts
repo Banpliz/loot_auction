@@ -701,6 +701,73 @@ describe('events routes', () => {
         expect(bobWins.map((w) => w.item_id).sort()).toEqual([remeltId, ...temperIds].sort());
       });
     });
+
+    describe('gear is drawn before stones (2026-09-10)', () => {
+      it('a sole claimant on both a gear lot and a stone lot always keeps the gear, never the stone', async () => {
+        const screenshotId = db
+          .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
+          .run(eventId, '/tmp/o.png').lastInsertRowid as number;
+        const insertItem = db.prepare(
+          "INSERT INTO items (event_id, screenshot_id, name, image_path, status, category) VALUES (?, ?, ?, 'items/x.png', 'pool', ?)"
+        );
+        const gearId = insertItem.run(eventId, screenshotId, 'Меч', 'item').lastInsertRowid as number;
+        const temperId = insertItem.run(eventId, screenshotId, 'Закалка', 'stone_temper').lastInsertRowid as number;
+
+        await app.inject({ method: 'POST', url: `/api/items/${gearId}/claim`, headers: { 'x-telegram-init-data': memberInitData } });
+        await app.inject({ method: 'POST', url: `/api/items/${temperId}/claim`, headers: { 'x-telegram-init-data': memberInitData } });
+        await app.inject({ method: 'POST', url: `/api/events/${eventId}/finish`, headers: { 'x-telegram-init-data': adminInitData } });
+
+        const bobWins = db.prepare('SELECT item_id FROM item_winners WHERE telegram_id = 2').all() as { item_id: number }[];
+        // Deterministic now that gear resolves first: he's the only gear claimant, so he
+        // always gets it, which then always excludes him from the temper lot too —
+        // before the fix this depended on which lot the shuffle happened to draw first.
+        expect(bobWins.map((w) => w.item_id)).toEqual([gearId]);
+      });
+    });
+
+    describe('empty-handed guarantee: leftover stones go to whoever ended up with nothing', () => {
+      it('tops someone up to 3 stones from leftover lots they never claimed, once everything else leaves them empty-handed', async () => {
+        const screenshotId = db
+          .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
+          .run(eventId, '/tmp/o.png').lastInsertRowid as number;
+        const insertItem = db.prepare(
+          "INSERT INTO items (event_id, screenshot_id, name, image_path, status, category, quantity) VALUES (?, ?, ?, 'items/x.png', 'pool', ?, ?)"
+        );
+        // Bob claims this one but it has nothing to give (quantity 0) — he still counts
+        // as "claimed some stone lot" for the guarantee, but wins nothing from it.
+        const emptyTemperId = insertItem.run(eventId, screenshotId, 'Пустой', 'stone_temper', 0).lastInsertRowid as number;
+        // Genuinely free stock nobody claimed at all — same shape as the real leftover
+        // the alliance reported (stones nobody bid on going to waste). Three SEPARATE
+        // lots, not one lot at quantity 3 — same one-row-per-item-per-person rule as
+        // everywhere else in the draw (see item_winners' UNIQUE constraint) means a
+        // single lot can only ever contribute 1 unit to any one person, no matter its
+        // own quantity; the guarantee needs distinct lots to actually reach 3.
+        const freeIds = ['А', 'Б', 'В'].map((label) => insertItem.run(eventId, screenshotId, `Ничья закалка ${label}`, 'stone_temper', 1).lastInsertRowid as number);
+
+        await app.inject({ method: 'POST', url: `/api/items/${emptyTemperId}/claim`, headers: { 'x-telegram-init-data': memberInitData } });
+        await app.inject({ method: 'POST', url: `/api/events/${eventId}/finish`, headers: { 'x-telegram-init-data': adminInitData } });
+
+        const bobWins = db.prepare('SELECT item_id FROM item_winners WHERE telegram_id = 2').all() as { item_id: number }[];
+        expect(bobWins.map((w) => w.item_id).sort()).toEqual(freeIds.sort()); // all 3 free lots, not the empty one he claimed
+      });
+
+      it("doesn't guarantee anything to someone who never claimed a single stone lot", async () => {
+        const screenshotId = db
+          .prepare('INSERT INTO screenshots (event_id, original_path, rows, uploaded_by) VALUES (?, ?, 1, 1)')
+          .run(eventId, '/tmp/o.png').lastInsertRowid as number;
+        const insertItem = db.prepare(
+          "INSERT INTO items (event_id, screenshot_id, name, image_path, status, category, quantity) VALUES (?, ?, ?, 'items/x.png', 'pool', ?, ?)"
+        );
+        const gearId = insertItem.run(eventId, screenshotId, 'Меч', 'item', 0).lastInsertRowid as number; // wins nothing, deliberately
+        insertItem.run(eventId, screenshotId, 'Ничья закалка', 'stone_temper', 5); // free stock, but Bob never bid on any stone
+
+        await app.inject({ method: 'POST', url: `/api/items/${gearId}/claim`, headers: { 'x-telegram-init-data': memberInitData } });
+        await app.inject({ method: 'POST', url: `/api/events/${eventId}/finish`, headers: { 'x-telegram-init-data': adminInitData } });
+
+        const bobWins = db.prepare('SELECT COUNT(*) as n FROM item_winners WHERE telegram_id = 2').get() as { n: number };
+        expect(bobWins.n).toBe(0);
+      });
+    });
   });
 
   describe('GET /events/:id/results', () => {
